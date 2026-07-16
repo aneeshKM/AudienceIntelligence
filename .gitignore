@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.venv/
+runs/
+build/
+audience_trend_miner.egg-info/

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://audienceintelligence.local/schemas/audit.schema.json",
+  "title": "Audience Trend Miner Audit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "degraded", "run", "decisions", "failures"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "status": {"enum": ["success", "failed"]},
+    "degraded": {"type": "boolean"},
+    "run": {"type": "object"},
+    "decisions": {"type": "array"},
+    "failures": {"type": "array"}
+  }
+}
