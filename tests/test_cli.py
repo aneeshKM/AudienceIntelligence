@@ -92,6 +92,10 @@ class CliRunContractTest(unittest.TestCase):
                         "embedding_mode": "local",
                     },
                     "run_id": run_directory.name,
+                    "status": "success",
+                    "degraded": False,
+                    "failure_count": 0,
+                    "failure_reasons": [],
                 },
                 completed.stderr,
             )

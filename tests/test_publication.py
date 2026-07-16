@@ -209,6 +209,8 @@ class RunPublicationTest(unittest.TestCase):
                 )
             )
             audit = json.loads((published / "audit.json").read_text())
+            manifest = json.loads((published / "manifest.json").read_text())
+            portfolio = json.loads((published / "portfolio.json").read_text())
             report = (published / "report.html").read_text()
 
             self.assertTrue(
@@ -216,6 +218,15 @@ class RunPublicationTest(unittest.TestCase):
             )
 
         self.assertTrue(audit["degraded"])
+        for artifact in (manifest, portfolio):
+            self.assertEqual(artifact["status"], "degraded")
+            self.assertTrue(artifact["degraded"])
+            self.assertEqual(artifact["failure_count"], 1)
+            self.assertEqual(artifact["failure_reasons"], ["metadata: Broken_Alias — unavailable"])
+        self.assertEqual(audit["status"], "degraded")
+        self.assertEqual(audit["failure_count"], 1)
+        self.assertIn("This run is degraded", report)
+        self.assertIn("metadata: Broken_Alias — unavailable", report)
         self.assertEqual(audit["qualified_signals"][0]["alias_titles"], ["Signal_Alias"])
         self.assertEqual(
             next(
@@ -229,6 +240,35 @@ class RunPublicationTest(unittest.TestCase):
         self.assertIn("Rejected deterministic noise", report)
         self.assertIn("Main Page", report)
         self.assertIn("not yet accepted audiences", report)
+
+    def test_exhausted_article_judgment_degrades_run_without_blocking_other_articles(self) -> None:
+        failed = _qualified_article(42, "Unjudgeable signal")
+        accepted = _qualified_article(43, "Home espresso")
+        qualification = qualify_trends((failed, accepted))
+        classification = classify_articles(
+            (failed, accepted),
+            ScriptedGenerator(
+                {"invalid": True}, {"invalid": True}, {"invalid": True}, judgment()
+            ),
+            sleep=lambda _: None,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            published = publish_run(publication_input(
+                Path(temporary_directory) / "runs",
+                attention=WikimediaAttentionResult((), (failed, accepted), ()),
+                qualification=qualification,
+                classification=classification,
+            ))
+            audit = json.loads((published / "audit.json").read_text())
+
+        self.assertEqual([item["canonical_title"] for item in audit["qualified_signals"]],
+                         ["Home espresso"])
+        self.assertEqual(audit["status"], "degraded")
+        self.assertEqual(audit["failures"][0]["operation"], "article_classification")
+        self.assertEqual(audit["failures"][0]["subject"], "page:42")
+        self.assertEqual(audit["failures"][0]["attempts"], 3)
+        self.assertIn("ValidationError", audit["failures"][0]["reason"])
 
     def test_duplicate_evidence_identity_leaves_no_run_output(self) -> None:
         attention = WikimediaAttentionResult(

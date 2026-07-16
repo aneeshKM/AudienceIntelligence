@@ -88,6 +88,10 @@ def _verify_existing_publication(
 
 
 def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
+    failures = _run_failure_records(publication)
+    degraded = bool(failures)
+    status = "degraded" if degraded else "success"
+    failure_reasons = [_failure_summary(item) for item in failures]
     manifest = {
         "as_of_argument": (
             publication.as_of_argument.isoformat()
@@ -105,16 +109,25 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         },
         "configuration": publication.configuration,
         "run_id": publication.run_id,
+        "status": status,
+        "degraded": degraded,
+        "failure_count": len(failures),
+        "failure_reasons": failure_reasons,
     }
     portfolio = {
         "schema_version": "1.0",
         "as_of": publication.as_of.isoformat(),
+        "status": status,
+        "degraded": degraded,
+        "failure_count": len(failures),
+        "failure_reasons": failure_reasons,
         "audiences": [_portfolio_record(item) for item in publication.portfolio.audiences],
     }
     audit = {
         "schema_version": "1.0",
-        "status": "success",
-        "degraded": False,
+        "status": status,
+        "degraded": degraded,
+        "failure_count": len(failures),
         "run": manifest,
         "decisions": [
             _decision_audit_record(decision, publication.classification)
@@ -135,15 +148,11 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         "portfolio_calculations": json.loads(
             json.dumps([asdict(item) for item in publication.portfolio.audiences])
         ),
-        "failures": [],
+        "failures": failures,
     }
     audit.update(_attention_audit_data(publication.attention))
-    audit["failures"].extend(_refinement_failure_records(publication.refinement))
-    portfolio_failures = _portfolio_failure_records(publication.portfolio)
-    audit["failures"].extend(portfolio_failures)
-    audit["degraded"] = bool(audit["degraded"]) or _refinement_degraded(
-        publication.refinement
-    ) or bool(portfolio_failures)
+    audit["failures"] = failures
+    audit["degraded"] = degraded
     _validate("portfolio.schema.json", portfolio)
     _validate("audit.schema.json", audit)
 
@@ -176,6 +185,8 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
 
 def _portfolio_record(audience: PortfolioAudience) -> dict[str, object]:
     return {
+        "source_component_id": audience.source_component_id,
+        "page_ids": list(audience.page_ids),
         "name": audience.name,
         "description": audience.description,
         "estimated_size_index": audience.estimated_size_index,
@@ -248,15 +259,32 @@ def _accepted_signal_records(publication: PublicationInput) -> list[dict[str, ob
     ]
 
 
-def _refinement_degraded(refinement: ClusterRefinementResult) -> bool:
-    return any(
-        decision.outcome == "exhausted_attempts"
-        or any(
-            assessment.decision_reason == "exhausted_attempts"
-            for assessment in decision.safety_assessments
-        )
-        for decision in refinement.decisions
-    )
+def _run_failure_records(publication: PublicationInput) -> list[dict[str, object]]:
+    return [
+        *[asdict(failure) for failure in publication.attention.failures],
+        *_classification_failure_records(publication.classification),
+        *_refinement_failure_records(publication.refinement),
+        *_portfolio_failure_records(publication.portfolio),
+    ]
+
+
+def _classification_failure_records(
+    classification: ArticleClassificationResult,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "operation": "article_classification",
+            "subject": f"page:{decision.page_id}",
+            "attempts": len(decision.attempts),
+            "reason": decision.attempts[-1].error or "structured generation failed",
+        }
+        for decision in classification.decisions
+        if decision.decision_reason == "exhausted_attempts"
+    ]
+
+
+def _failure_summary(failure: dict[str, object]) -> str:
+    return f"{failure['operation']}: {failure['subject']} — {failure['reason']}"
 
 
 def _refinement_failure_records(
@@ -390,6 +418,14 @@ def _qualified_signal_record(decision: TrendDecision) -> dict[str, object]:
 
 
 def _report(publication: PublicationInput) -> str:
+    failures = _run_failure_records(publication)
+    degraded_notice = (
+        '<section class="notice"><h2>This run is degraded</h2><p>'
+        f"{len(failures)} item-level failure(s) occurred; unaffected items completed.</p><ul>"
+        + "".join(f"<li>{escape(_failure_summary(item))}</li>" for item in failures)
+        + "</ul></section>"
+        if failures else ""
+    )
     qualification = publication.qualification
     accepted_page_ids = {
         decision.page_id for decision in publication.classification.accepted
@@ -458,6 +494,7 @@ def _report(publication: PublicationInput) -> str:
 <body><main>
   <p>Audience Trend Miner</p>
   <h1>Emerging Audience Portfolio</h1>
+  {degraded_notice}
   <p class="notice">Qualified signals are not yet accepted audiences; candidate clusters are not accepted audiences until they pass semantic refinement and a separate cluster-level safety veto.</p>
   <h2>Candidate clusters</h2>
   <ul>{candidate_clusters}</ul>

@@ -126,6 +126,8 @@ class PortfolioTransformationTest(unittest.TestCase):
             report = (published / "report.html").read_text()
 
         audience = portfolio["audiences"][0]
+        self.assertEqual(audience["source_component_id"], 1)
+        self.assertEqual(audience["page_ids"], [1, 2])
         self.assertEqual(audience["estimated_size_index"], 100.0)
         self.assertIn(
             '"estimated_size_index": 100.00',
