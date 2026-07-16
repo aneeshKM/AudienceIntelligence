@@ -37,6 +37,10 @@ timestamped directory containing:
 - `audit.json` — run status, decisions, and failures
 - `wikimedia/` — saved discovery, Pageviews, metadata, and canonical artifacts
 
+Run Publication is atomic: artifacts are assembled and validated before being
+staged, and the timestamped directory appears only after every file is complete.
+Publication failures leave no partial run directory.
+
 Discovery uses Wikimedia's public APIs by default. If any daily top-page
 response is still unavailable after three attempts, the command exits without
 creating a partial run directory.
@@ -55,5 +59,6 @@ current window ends two days before the effective as-of date.
 python -m unittest discover -v
 ```
 
-The end-to-end test invokes the public CLI in a subprocess and checks its exit
-status, observable files, schemas, and resolved dates.
+Publication tests exercise the complete artifact contract and atomic failure
+behavior through the Run Publication interface. Focused CLI subprocess tests
+cover argument and date wiring, adapter selection, and Candidate Universe aborts.

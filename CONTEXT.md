@@ -23,3 +23,7 @@ A Canonical Article whose aggregated current-window traffic is at least 100,000,
 ## Deterministic Noise
 
 An unmistakable technical or navigational Wikipedia target: Main Page or a page in an explicitly enumerated technical namespace. List and index articles are not Deterministic Noise merely because of their title form.
+
+## Run Publication
+
+The atomic operation that accepts finished domain results and effective run facts, assembles and validates the complete artifact bundle, renders the report, stages all files, and exposes the timestamped run directory only after every artifact is complete. Domain degradation is publishable; publication failure leaves no completed run directory.

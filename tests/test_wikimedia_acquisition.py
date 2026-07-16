@@ -24,7 +24,7 @@ def complete_daily_views(previous: int, current: int) -> list[dict[str, object]]
     ]
 
 
-class WikimediaAttentionAcquisitionTest(unittest.TestCase):
+class CanonicalArticleAggregationTest(unittest.TestCase):
     def test_builds_one_canonical_article_with_dated_alias_traffic_and_evidence(self) -> None:
         adapter = FixtureWikimediaAdapter(
             discovery={
@@ -100,6 +100,8 @@ class WikimediaAttentionAcquisitionTest(unittest.TestCase):
             },
         )
 
+
+class CandidateUniverseAcquisitionTest(unittest.TestCase):
     def test_discovery_exhaustion_aborts_the_candidate_universe_after_three_attempts(self) -> None:
         adapter = FixtureWikimediaAdapter(
             discovery={
@@ -131,6 +133,8 @@ class WikimediaAttentionAcquisitionTest(unittest.TestCase):
             ("discovery", "2026-07-11", 3),
         )
 
+
+class AliasEvidenceAcquisitionTest(unittest.TestCase):
     def test_article_failure_degrades_and_preserves_the_healthy_candidate(self) -> None:
         adapter = FixtureWikimediaAdapter(
             discovery={
@@ -181,6 +185,42 @@ class WikimediaAttentionAcquisitionTest(unittest.TestCase):
             ),
         )
 
+    def test_metadata_failure_preserves_pageviews_evidence_acquired_before_failure(self) -> None:
+        adapter = FixtureWikimediaAdapter(
+            discovery={
+                (date(2026, 7, 8) + timedelta(days=offset)).isoformat(): [
+                    "Broken_Metadata"
+                ]
+                for offset in range(7)
+            },
+            pageviews={
+                "Broken_Metadata": complete_daily_views(3, 6),
+            },
+            metadata={},
+            transient_failures={"metadata:Broken_Metadata": 3},
+        )
+
+        result = acquire_wikimedia_attention(
+            AnalysisWindows(
+                previous_start=date(2026, 7, 1),
+                previous_end=date(2026, 7, 7),
+                current_start=date(2026, 7, 8),
+                current_end=date(2026, 7, 14),
+            ),
+            adapter,
+        )
+
+        self.assertEqual(result.canonical_articles, ())
+        self.assertEqual(result.failures[0].operation, "metadata")
+        self.assertIn(
+            "pageviews/Broken_Metadata.json",
+            {artifact.name for artifact in result.raw_artifacts},
+        )
+        self.assertNotIn(
+            "metadata/Broken_Metadata.json",
+            {artifact.name for artifact in result.raw_artifacts},
+        )
+
     def test_incomplete_daily_pageviews_are_rejected_as_an_article_failure(self) -> None:
         adapter = FixtureWikimediaAdapter(
             discovery={
@@ -220,6 +260,8 @@ class WikimediaAttentionAcquisitionTest(unittest.TestCase):
         )
         self.assertIn("complete dated observations", result.failures[0].reason)
 
+
+class CanonicalArticleConflictTest(unittest.TestCase):
     def test_conflicting_canonical_titles_exclude_the_page_group_deterministically(self) -> None:
         adapter = FixtureWikimediaAdapter(
             discovery={

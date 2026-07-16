@@ -9,9 +9,6 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-import jsonschema
-
-
 def empty_run_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment["AUDIENCE_TREND_MINER_WIKIMEDIA_BASE_URL"] = ""
@@ -80,44 +77,6 @@ class CliRunContractTest(unittest.TestCase):
                 },
                 completed.stderr,
             )
-
-    def test_successful_empty_run_writes_schema_valid_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as output_dir:
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "audience_trend_miner",
-                    "--as-of",
-                    "2026-07-16",
-                    "--output-dir",
-                    output_dir,
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=empty_run_environment(),
-            )
-            run_directory = next(Path(output_dir).iterdir())
-            portfolio = json.loads((run_directory / "portfolio.json").read_text())
-            audit = json.loads((run_directory / "audit.json").read_text())
-            report = (run_directory / "report.html").read_text()
-            schema_directory = (
-                Path(__file__).parents[1] / "audience_trend_miner" / "schemas"
-            )
-
-            jsonschema.validate(
-                portfolio,
-                json.loads((schema_directory / "portfolio.schema.json").read_text()),
-            )
-            jsonschema.validate(
-                audit,
-                json.loads((schema_directory / "audit.schema.json").read_text()),
-            )
-            self.assertEqual(portfolio["audiences"], [])
-            self.assertEqual(audit["status"], "success")
-            self.assertIn("No emerging audiences qualified for this run.", report)
-            self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_omitted_as_of_uses_current_utc_date(self) -> None:
         with tempfile.TemporaryDirectory() as output_dir:
