@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 import json
 from pathlib import Path
-import random
 from threading import Lock
-import time
 from typing import Mapping, Protocol
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
@@ -17,7 +14,6 @@ from urllib.request import Request, urlopen
 DEFAULT_WIKIMEDIA_REST_BASE_URL = "https://wikimedia.org/api/rest_v1"
 DEFAULT_WIKIPEDIA_ACTION_API_URL = "https://en.wikipedia.org/w/api.php"
 USER_AGENT = "AudienceTrendMiner/0.1 (https://github.com/aneeshKM/AudienceIntelligence)"
-MAX_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -81,12 +77,6 @@ class WikimediaPermanentError(RuntimeError):
         super().__init__(message)
 
 
-@dataclass(frozen=True)
-class AcquisitionSettings:
-    max_concurrent_articles: int = 8
-    base_backoff_seconds: float = 1.0
-
-
 class IncompleteCandidateUniverseError(RuntimeError):
     def __init__(self, failure: AcquisitionFailure) -> None:
         self.failure = failure
@@ -129,12 +119,6 @@ class MetadataResponse:
 
 
 @dataclass(frozen=True)
-class _CandidateUniverse:
-    raw_titles: tuple[str, ...]
-    artifacts: tuple[RawArtifact, ...]
-
-
-@dataclass(frozen=True)
 class AliasEvidence:
     traffic: AliasTraffic
     metadata: MetadataResponse
@@ -145,22 +129,6 @@ class AliasEvidence:
 class AliasEvidenceFailure:
     failure: AcquisitionFailure
     artifacts: tuple[RawArtifact, ...]
-
-
-type AliasAcquisition = AliasEvidence | AliasEvidenceFailure
-
-
-@dataclass(frozen=True)
-class WikimediaEvidence:
-    raw_candidate_titles: tuple[str, ...]
-    aliases: tuple[AliasAcquisition, ...]
-    raw_artifacts: tuple[RawArtifact, ...]
-
-
-@dataclass(frozen=True)
-class _CanonicalFormation:
-    articles: tuple[CanonicalArticle, ...]
-    failures: tuple[AcquisitionFailure, ...]
 
 
 class WikimediaAdapter(Protocol):
@@ -334,242 +302,3 @@ class FixtureWikimediaAdapter:
                     f"scripted transient failure: {key}",
                     retry_immediately=True,
                 )
-
-
-def acquire_wikimedia_attention(
-    windows: AnalysisWindows,
-    adapter: WikimediaAdapter,
-    settings: AcquisitionSettings = AcquisitionSettings(),
-) -> WikimediaAttentionResult:
-    return transform_wikimedia_attention(
-        fetch_wikimedia_evidence(windows, adapter, settings)
-    )
-
-def fetch_wikimedia_evidence(
-    windows: AnalysisWindows,
-    adapter: WikimediaAdapter,
-    settings: AcquisitionSettings = AcquisitionSettings(),
-) -> WikimediaEvidence:
-    universe = _discover_candidate_universe(windows, adapter, settings)
-    alias_results = _acquire_aliases(
-        universe.raw_titles,
-        windows,
-        adapter,
-        settings,
-    )
-    return WikimediaEvidence(
-        raw_candidate_titles=universe.raw_titles,
-        aliases=alias_results,
-        raw_artifacts=(
-            *universe.artifacts,
-            *(
-                artifact
-                for result in alias_results
-                for artifact in result.artifacts
-            ),
-        ),
-    )
-
-
-def transform_wikimedia_attention(evidence: WikimediaEvidence) -> WikimediaAttentionResult:
-    successful = tuple(
-        result for result in evidence.aliases if isinstance(result, AliasEvidence)
-    )
-    failures = tuple(
-        result.failure
-        for result in evidence.aliases
-        if isinstance(result, AliasEvidenceFailure)
-    )
-    canonical = _form_canonical_articles(successful)
-    return WikimediaAttentionResult(
-        raw_candidate_titles=evidence.raw_candidate_titles,
-        canonical_articles=canonical.articles,
-        raw_artifacts=evidence.raw_artifacts,
-        failures=(*failures, *canonical.failures),
-    )
-
-
-def _discover_candidate_universe(
-    windows: AnalysisWindows,
-    adapter: WikimediaAdapter,
-    settings: AcquisitionSettings,
-) -> _CandidateUniverse:
-    titles: set[str] = set()
-    artifacts: list[RawArtifact] = []
-    day = windows.current_start
-    while day <= windows.current_end:
-        try:
-            response = _attempt(
-                lambda: adapter.daily_top_pages(day), settings
-            )
-        except (WikimediaTransientError, WikimediaPermanentError) as error:
-            raise IncompleteCandidateUniverseError(
-                AcquisitionFailure(
-                    operation="discovery",
-                    subject=day.isoformat(),
-                    attempts=error.attempts,
-                    reason=str(error),
-                )
-            ) from error
-        titles.update(response.titles)
-        artifacts.append(RawArtifact("discovery", day.isoformat(), response.raw))
-        day += timedelta(days=1)
-    return _CandidateUniverse(tuple(sorted(titles)), tuple(artifacts))
-
-
-def _acquire_aliases(
-    raw_titles: tuple[str, ...],
-    windows: AnalysisWindows,
-    adapter: WikimediaAdapter,
-    settings: AcquisitionSettings,
-) -> tuple[AliasAcquisition, ...]:
-    with ThreadPoolExecutor(max_workers=settings.max_concurrent_articles) as executor:
-        return tuple(
-            executor.map(
-                lambda title: _acquire_alias(title, windows, adapter, settings),
-                raw_titles,
-            )
-        )
-
-
-def _form_canonical_articles(
-    evidence: tuple[AliasEvidence, ...],
-) -> _CanonicalFormation:
-    grouped: dict[int, list[AliasEvidence]] = {}
-    for alias_evidence in evidence:
-        grouped.setdefault(alias_evidence.metadata.page_id, []).append(alias_evidence)
-
-    failures: list[AcquisitionFailure] = []
-    canonical_articles: list[CanonicalArticle] = []
-    for page_id in sorted(grouped):
-        page_evidence = grouped[page_id]
-        canonical_titles = {
-            item.metadata.canonical_title for item in page_evidence
-        }
-        if len(canonical_titles) != 1:
-            failures.append(
-                AcquisitionFailure(
-                    operation="canonicalization",
-                    subject=str(page_id),
-                    attempts=1,
-                    reason=(
-                        "aliases returned conflicting canonical titles: "
-                        + ", ".join(sorted(canonical_titles))
-                    ),
-                )
-            )
-            continue
-        metadata = page_evidence[0].metadata
-        aliases = tuple(item.traffic for item in page_evidence)
-        canonical_articles.append(
-            CanonicalArticle(
-                page_id=page_id,
-                canonical_title=metadata.canonical_title,
-                extract=metadata.extract,
-                categories=metadata.categories,
-                previous_window_views=sum(
-                    alias.previous_window_views for alias in aliases
-                ),
-                current_window_views=sum(alias.current_window_views for alias in aliases),
-                aliases=aliases,
-            )
-        )
-    return _CanonicalFormation(
-        articles=tuple(canonical_articles),
-        failures=tuple(failures),
-    )
-
-
-def _attempt(operation, settings: AcquisitionSettings):
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            return operation()
-        except WikimediaPermanentError as error:
-            error.attempts = attempt
-            raise
-        except WikimediaTransientError as error:
-            error.attempts = attempt
-            if attempt == MAX_ATTEMPTS:
-                raise
-            if not error.retry_immediately:
-                delay = settings.base_backoff_seconds * (2 ** (attempt - 1))
-                time.sleep(delay + random.uniform(0, delay))
-
-
-def _acquire_alias(
-    raw_title: str,
-    windows: AnalysisWindows,
-    adapter: WikimediaAdapter,
-    settings: AcquisitionSettings,
-) -> AliasAcquisition:
-    expected_dates = tuple(
-        windows.previous_start + timedelta(days=offset)
-        for offset in range((windows.current_end - windows.previous_start).days + 1)
-    )
-
-    def fetch_complete_pageviews() -> PageviewsResponse:
-        response = adapter.article_pageviews(
-            raw_title, windows.previous_start, windows.current_end
-        )
-        observed_dates = tuple(item.date for item in response.daily_views)
-        if observed_dates != expected_dates:
-            raise WikimediaTransientError(
-                "Pageviews response must contain complete dated observations "
-                f"from {windows.previous_start} through {windows.current_end}"
-            )
-        return response
-
-    try:
-        pageviews = _attempt(fetch_complete_pageviews, settings)
-    except (WikimediaTransientError, WikimediaPermanentError) as error:
-        return AliasEvidenceFailure(
-            failure=AcquisitionFailure(
-                operation="pageviews",
-                subject=raw_title,
-                attempts=error.attempts,
-                reason=str(error),
-            ),
-            artifacts=(),
-        )
-    pageviews_artifact = RawArtifact("pageviews", raw_title, pageviews.raw)
-    try:
-        metadata = _attempt(
-            lambda: adapter.article_metadata(raw_title), settings
-        )
-    except (WikimediaTransientError, WikimediaPermanentError) as error:
-        return AliasEvidenceFailure(
-            failure=AcquisitionFailure(
-                operation="metadata",
-                subject=raw_title,
-                attempts=error.attempts,
-                reason=str(error),
-            ),
-            artifacts=(pageviews_artifact,),
-        )
-    previous_views = sum(
-        item.views
-        for item in pageviews.daily_views
-        if windows.previous_start <= item.date <= windows.previous_end
-    )
-    current_views = sum(
-        item.views
-        for item in pageviews.daily_views
-        if windows.current_start <= item.date <= windows.current_end
-    )
-    return AliasEvidence(
-        traffic=AliasTraffic(
-            raw_title=raw_title,
-            previous_window_views=previous_views,
-            current_window_views=current_views,
-            daily_views=pageviews.daily_views,
-        ),
-        metadata=metadata,
-        artifacts=(
-            pageviews_artifact,
-            RawArtifact(
-                "metadata",
-                raw_title,
-                metadata.raw,
-            ),
-        ),
-    )

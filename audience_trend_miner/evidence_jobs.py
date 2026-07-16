@@ -22,6 +22,32 @@ class EvidenceJob:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class CompletedEvidence:
+    operation: str
+    subject: str
+    evidence: Any
+    attempts: int
+
+
+@dataclass(frozen=True)
+class FailedEvidence:
+    operation: str
+    subject: str
+    attempts: int
+    reason: str
+
+
+TerminalEvidence = CompletedEvidence | FailedEvidence
+
+
+@dataclass(frozen=True)
+class ReadyTransformation:
+    job: EvidenceJob
+    pageviews: TerminalEvidence
+    metadata: TerminalEvidence
+
+
 class EvidenceJobStore:
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
@@ -79,12 +105,23 @@ class EvidenceJobStore:
         if row[0] != configuration:
             raise ValueError("resumed run configuration does not match recorded facts")
 
-    def enqueue(self, run_id: str, operation: str, subject: str) -> None:
+    def schedule_discovery(self, run_id: str, subjects: tuple[str, ...]) -> None:
+        self._schedule(run_id, "discovery", subjects)
+
+    def schedule_alias_evidence(
+        self, run_id: str, subjects: tuple[str, ...]
+    ) -> None:
+        self._schedule(run_id, "pageviews", subjects)
+        self._schedule(run_id, "metadata", subjects)
+
+    def _schedule(
+        self, run_id: str, operation: str, subjects: tuple[str, ...]
+    ) -> None:
         with psycopg.connect(self.database_url) as connection:
-            connection.execute(
+            connection.executemany(
                 """INSERT INTO evidence_jobs (run_id, operation, subject)
                    VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
-                (run_id, operation, subject),
+                ((run_id, operation, subject) for subject in subjects),
             )
 
     def reserve_publication_path(self, run_id: str, path: str) -> None:
@@ -148,16 +185,74 @@ class EvidenceJobStore:
             ).fetchone()
         return EvidenceJob(*row) if row else None
 
-    def jobs(self, run_id: str) -> tuple[EvidenceJob, ...]:
+    def claim_ready_transformation(
+        self, worker: str, *, lease_seconds: int, run_id: str
+    ) -> ReadyTransformation | None:
         with psycopg.connect(self.database_url) as connection:
-            rows = connection.execute(
-                """SELECT id, run_id, operation, subject, status, attempts,
-                          claimed_by, claim_token, evidence, error
-                   FROM evidence_jobs WHERE run_id = %s
-                   ORDER BY operation, subject""",
+            connection.execute(
+                """UPDATE evidence_jobs SET status = 'failed',
+                          error = 'lease attempts exhausted', claimed_by = NULL,
+                          claim_token = NULL, lease_expires_at = NULL
+                   WHERE run_id = %s AND operation = 'transform'
+                     AND status = 'claimed' AND lease_expires_at <= now()
+                     AND attempts >= 3""",
                 (run_id,),
-            ).fetchall()
-        return tuple(EvidenceJob(*row) for row in rows)
+            )
+            connection.execute(
+                """INSERT INTO evidence_jobs (run_id, operation, subject)
+                   SELECT pageviews.run_id, 'transform', pageviews.subject
+                   FROM evidence_jobs AS pageviews
+                   JOIN evidence_jobs AS metadata
+                     ON metadata.run_id = pageviews.run_id
+                    AND metadata.subject = pageviews.subject
+                    AND metadata.operation = 'metadata'
+                   WHERE pageviews.run_id = %s
+                     AND pageviews.operation = 'pageviews'
+                     AND pageviews.status IN ('completed', 'failed')
+                     AND metadata.status IN ('completed', 'failed')
+                   ON CONFLICT DO NOTHING""",
+                (run_id,),
+            )
+            row = connection.execute(
+                """WITH available AS (
+                       SELECT transformation.id
+                       FROM evidence_jobs AS transformation
+                       JOIN evidence_jobs AS pageviews
+                         ON pageviews.run_id = transformation.run_id
+                        AND pageviews.subject = transformation.subject
+                        AND pageviews.operation = 'pageviews'
+                       JOIN evidence_jobs AS metadata
+                         ON metadata.run_id = transformation.run_id
+                        AND metadata.subject = transformation.subject
+                        AND metadata.operation = 'metadata'
+                       WHERE transformation.run_id = %s
+                         AND transformation.operation = 'transform'
+                         AND (transformation.status = 'pending'
+                           OR (transformation.status = 'claimed'
+                             AND transformation.lease_expires_at <= now()))
+                         AND pageviews.status IN ('completed', 'failed')
+                         AND metadata.status IN ('completed', 'failed')
+                       ORDER BY transformation.subject
+                       FOR UPDATE OF transformation SKIP LOCKED LIMIT 1
+                   )
+                   UPDATE evidence_jobs AS jobs
+                   SET status = 'claimed', claimed_by = %s,
+                       lease_expires_at = now() + (%s * interval '1 second'),
+                       attempts = attempts + 1, claim_token = gen_random_uuid()
+                   FROM available WHERE jobs.id = available.id
+                   RETURNING jobs.id, jobs.run_id, jobs.operation, jobs.subject,
+                             jobs.status, jobs.attempts, jobs.claimed_by,
+                             jobs.claim_token""",
+                (run_id, worker, lease_seconds),
+            ).fetchone()
+        job = EvidenceJob(*row) if row else None
+        if job is None:
+            return None
+        dependencies = self._terminal_evidence(
+            run_id, ("pageviews", "metadata"), subject=job.subject
+        )
+        indexed = {item.operation: item for item in dependencies}
+        return ReadyTransformation(job, indexed["pageviews"], indexed["metadata"])
 
     def complete(self, job: EvidenceJob, evidence: object) -> None:
         self._finish(job, "completed", evidence=evidence)
@@ -173,6 +268,33 @@ class EvidenceJobStore:
         if updated != 1:
             raise RuntimeError("evidence job lease was lost before failure update")
 
+    def recover_incomplete_pageviews(
+        self,
+        transformation: EvidenceJob,
+        reason: str,
+    ) -> None:
+        """Return a transformation and its invalid upstream evidence to schedulable states."""
+        with psycopg.connect(self.database_url) as connection:
+            transformed = connection.execute(
+                """UPDATE evidence_jobs SET status = 'pending', error = NULL,
+                          claimed_by = NULL, claim_token = NULL, lease_expires_at = NULL
+                   WHERE id = %s AND claim_token = %s AND status = 'claimed'""",
+                (transformation.id, transformation.claim_token),
+            ).rowcount
+            evidence = connection.execute(
+                """UPDATE evidence_jobs
+                   SET status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END,
+                       evidence = NULL, error = %s,
+                       claimed_by = NULL, claim_token = NULL, lease_expires_at = NULL
+                   WHERE run_id = %s AND operation = 'pageviews' AND subject = %s
+                     AND status = 'completed'""",
+                (reason, transformation.run_id, transformation.subject),
+            ).rowcount
+            if transformed != 1 or evidence != 1:
+                raise RuntimeError(
+                    "incomplete evidence changed before retry transition"
+                )
+
     def _finish(self, job: EvidenceJob, status: str, *, evidence: object) -> None:
         with psycopg.connect(self.database_url) as connection:
             updated = connection.execute(
@@ -184,27 +306,56 @@ class EvidenceJobStore:
         if updated != 1:
             raise RuntimeError("evidence job lease was lost before completion")
 
-    def run_jobs_terminal(self, run_id: str, operation: str) -> bool:
+    def barrier_reached(self, run_id: str, operations: tuple[str, ...]) -> bool:
         with psycopg.connect(self.database_url) as connection:
-            count = connection.execute(
+            unfinished = connection.execute(
                 """SELECT count(*) FROM evidence_jobs
-                   WHERE run_id = %s AND operation = %s
+                   WHERE run_id = %s AND operation = ANY(%s::text[])
                      AND status NOT IN ('completed','failed')""",
-                (run_id, operation),
+                (run_id, list(operations)),
             ).fetchone()[0]
-        return count == 0
+            missing_transformations = 0
+            if "transform" in operations:
+                missing_transformations = connection.execute(
+                    """SELECT
+                           (SELECT count(*) FROM evidence_jobs
+                            WHERE run_id = %s AND operation = 'pageviews')
+                         - (SELECT count(*) FROM evidence_jobs
+                            WHERE run_id = %s AND operation = 'transform')""",
+                    (run_id, run_id),
+                ).fetchone()[0]
+        return unfinished == 0 and missing_transformations == 0
 
-    def completed_evidence(
-        self, run_id: str, operation: str
-    ) -> tuple[tuple[str, Any], ...]:
+    def results_at_barrier(
+        self, run_id: str, operations: tuple[str, ...]
+    ) -> tuple[TerminalEvidence, ...]:
+        if not self.barrier_reached(run_id, operations):
+            raise RuntimeError("evidence results requested before the run barrier")
+        return self._terminal_evidence(run_id, operations)
+
+    def _terminal_evidence(
+        self,
+        run_id: str,
+        operations: tuple[str, ...],
+        *,
+        subject: str | None = None,
+    ) -> tuple[TerminalEvidence, ...]:
         with psycopg.connect(self.database_url) as connection:
             rows = connection.execute(
-                """SELECT subject, evidence FROM evidence_jobs
-                   WHERE run_id = %s AND operation = %s AND status = 'completed'
-                   ORDER BY subject""",
-                (run_id, operation),
+                """SELECT operation, subject, status, attempts, evidence, error
+                   FROM evidence_jobs
+                   WHERE run_id = %s AND operation = ANY(%s::text[])
+                     AND status IN ('completed', 'failed')
+                     AND (%s::text IS NULL OR subject = %s::text)
+                   ORDER BY operation, subject""",
+                (run_id, list(operations), subject, subject),
             ).fetchall()
-        return tuple((subject, evidence) for subject, evidence in rows)
+        return tuple(
+            CompletedEvidence(operation, item_subject, evidence, attempts)
+            if status == "completed"
+            else FailedEvidence(operation, item_subject, attempts, error or "failed")
+            for operation, item_subject, status, attempts, evidence, error in rows
+        )
 
     def clear_for_tests(self) -> None:
         with psycopg.connect(self.database_url) as connection:
