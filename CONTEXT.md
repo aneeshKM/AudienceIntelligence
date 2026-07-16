@@ -15,3 +15,11 @@ The dated Pageviews observations and derived previous/current window totals belo
 ## Wikimedia Attention Acquisition
 
 The operation that builds a Candidate Universe, retrieves exact Alias Traffic and Wikipedia metadata, resolves Canonical Articles, aggregates aliases, and returns traceable raw evidence and structured failures. It does not publish run artifacts.
+
+## Qualified Signal
+
+A Canonical Article whose aggregated current-window traffic is at least 100,000, exceeds its previous-window traffic, has a positive capped scale-and-acceleration score, and is not explicit deterministic noise. A Qualified Signal is an input to later audience formation; it is not itself an accepted audience.
+
+## Deterministic Noise
+
+An unmistakable technical or navigational Wikipedia target: Main Page or a page in an explicitly enumerated technical namespace. List and index articles are not Deterministic Noise merely because of their title form.

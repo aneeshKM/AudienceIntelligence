@@ -4,13 +4,20 @@
   "title": "Audience Trend Miner Audit",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "status", "degraded", "run", "decisions", "failures"],
+  "required": ["schema_version", "status", "degraded", "run", "decisions", "qualified_signals", "failures"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "status": {"enum": ["success", "failed"]},
     "degraded": {"type": "boolean"},
     "run": {"type": "object"},
-    "decisions": {"type": "array"},
+    "decisions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/trendDecision"}
+    },
+    "qualified_signals": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/qualifiedSignal"}
+    },
     "failures": {
       "type": "array",
       "items": {"$ref": "#/$defs/failure"}
@@ -26,6 +33,77 @@
     }
   },
   "$defs": {
+    "qualificationGates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum_traffic", "growth", "positive_score"],
+      "properties": {
+        "minimum_traffic": {"type": "boolean"},
+        "growth": {"type": "boolean"},
+        "positive_score": {"type": "boolean"}
+      }
+    },
+    "trendDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page_id", "canonical_title", "previous_window_views", "current_window_views", "trend_score", "gates", "outcome", "reasons", "exclusion_reason"],
+      "properties": {
+        "page_id": {"type": "integer", "minimum": 1},
+        "canonical_title": {"type": "string", "minLength": 1},
+        "previous_window_views": {"type": "integer", "minimum": 0},
+        "current_window_views": {"type": "integer", "minimum": 0},
+        "trend_score": {"type": "number"},
+        "gates": {"$ref": "#/$defs/qualificationGates"},
+        "outcome": {"enum": ["qualified_signal", "failed_qualification", "rejected_noise"]},
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "all_qualification_gates_passed",
+              "minimum_traffic_failed",
+              "growth_failed",
+              "positive_score_failed",
+              "main_page",
+              "technical_namespace:category",
+              "technical_namespace:draft",
+              "technical_namespace:file",
+              "technical_namespace:help",
+              "technical_namespace:media",
+              "technical_namespace:mediawiki",
+              "technical_namespace:module",
+              "technical_namespace:portal",
+              "technical_namespace:special",
+              "technical_namespace:template",
+              "technical_namespace:timedtext",
+              "technical_namespace:user",
+              "technical_namespace:user talk",
+              "technical_namespace:wikipedia"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "exclusion_reason": {"type": ["string", "null"]}
+      }
+    },
+    "qualifiedSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page_id", "canonical_title", "alias_titles", "previous_window_views", "current_window_views", "trend_score"],
+      "properties": {
+        "page_id": {"type": "integer", "minimum": 1},
+        "canonical_title": {"type": "string", "minLength": 1},
+        "alias_titles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "previous_window_views": {"type": "integer", "minimum": 0},
+        "current_window_views": {"type": "integer", "minimum": 0},
+        "trend_score": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
     "dailyView": {
       "type": "object",
       "additionalProperties": false,

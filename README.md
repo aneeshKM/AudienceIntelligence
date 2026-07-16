@@ -4,6 +4,9 @@ Audience Trend Miner turns public attention signals into an Emerging Audience
 Portfolio. A run discovers the complete current-window candidate universe from
 English Wikipedia, retrieves exact traffic across both analysis windows, and
 canonicalizes aliases without fabricating audiences.
+It then applies auditable traffic, growth, and trend-score gates and removes only
+explicit technical or navigational noise. Qualified articles remain attention
+signals for later clustering; the CLI does not present them as audiences.
 
 ## Install on macOS
 

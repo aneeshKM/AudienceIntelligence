@@ -3,10 +3,16 @@ from __future__ import annotations
 import json
 import os
 from datetime import date, datetime, timedelta, timezone
+from html import escape
 from pathlib import Path
 
 import jsonschema
 
+from audience_trend_miner.trends import (
+    TrendDecision,
+    TrendQualificationResult,
+    qualify_trends,
+)
 from audience_trend_miner.wikimedia import (
     AnalysisWindows,
     FixtureWikimediaAdapter,
@@ -50,9 +56,11 @@ def execute_run(as_of_argument: date | None, output_directory: Path) -> Path:
         "degraded": False,
         "run": manifest,
         "decisions": [],
+        "qualified_signals": [],
         "failures": [],
     }
     wikimedia_artifacts: dict[str, object] = {}
+    qualification: TrendQualificationResult | None = None
     fixture_path = os.environ.get("AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE")
     rest_base_url = os.environ.get("AUDIENCE_TREND_MINER_WIKIMEDIA_BASE_URL")
     if fixture_path:
@@ -77,6 +85,13 @@ def execute_run(as_of_argument: date | None, output_directory: Path) -> Path:
             adapter,
         )
         audit.update(attention.audit_data())
+        qualification = qualify_trends(attention.canonical_articles)
+        audit["decisions"] = [
+            _decision_audit_record(decision) for decision in qualification.decisions
+        ]
+        audit["qualified_signals"] = [
+            _qualified_signal_record(decision) for decision in qualification.qualified
+        ]
         wikimedia_artifacts = {
             artifact.name: artifact.payload for artifact in attention.raw_artifacts
         }
@@ -101,7 +116,9 @@ def execute_run(as_of_argument: date | None, output_directory: Path) -> Path:
             artifact_path = wikimedia_directory / relative_path
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
             _write_json(artifact_path, artifact)
-    (run_directory / "report.html").write_text(_empty_report(), encoding="utf-8")
+    (run_directory / "report.html").write_text(
+        _report(qualification), encoding="utf-8"
+    )
     return run_directory
 
 
@@ -114,24 +131,85 @@ def _write_json(path: Path, artifact: object) -> None:
     path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
 
 
-def _empty_report() -> str:
-    return """<!doctype html>
+def _decision_audit_record(decision: TrendDecision) -> dict[str, object]:
+    outcome = (
+        "rejected_noise"
+        if decision.exclusion_reason is not None
+        else "qualified_signal" if decision.included else "failed_qualification"
+    )
+    reasons = []
+    if decision.exclusion_reason is not None:
+        reasons.append(decision.exclusion_reason)
+    if not decision.gates.minimum_traffic:
+        reasons.append("minimum_traffic_failed")
+    if not decision.gates.growth:
+        reasons.append("growth_failed")
+    if not decision.gates.positive_score:
+        reasons.append("positive_score_failed")
+    if decision.included:
+        reasons.append("all_qualification_gates_passed")
+    return {
+        "page_id": decision.article.page_id,
+        "canonical_title": decision.article.canonical_title,
+        "previous_window_views": decision.article.previous_window_views,
+        "current_window_views": decision.article.current_window_views,
+        "trend_score": decision.score,
+        "gates": {
+            "minimum_traffic": decision.gates.minimum_traffic,
+            "growth": decision.gates.growth,
+            "positive_score": decision.gates.positive_score,
+        },
+        "outcome": outcome,
+        "reasons": reasons,
+        "exclusion_reason": decision.exclusion_reason,
+    }
+
+
+def _qualified_signal_record(decision: TrendDecision) -> dict[str, object]:
+    return {
+        "page_id": decision.article.page_id,
+        "canonical_title": decision.article.canonical_title,
+        "alias_titles": [alias.raw_title for alias in decision.article.aliases],
+        "previous_window_views": decision.article.previous_window_views,
+        "current_window_views": decision.article.current_window_views,
+        "trend_score": decision.score,
+    }
+
+
+def _report(qualification: TrendQualificationResult | None) -> str:
+    qualified_items = "".join(
+        f"<li><strong>{escape(decision.article.canonical_title)}</strong> — "
+        f"{decision.article.current_window_views:,} current views; "
+        f"trend score {decision.score:.2f}</li>"
+        for decision in (qualification.qualified if qualification else ())
+    ) or "<li>No attention signals qualified for this run.</li>"
+    noise_items = "".join(
+        f"<li><strong>{escape(decision.article.canonical_title)}</strong> — "
+        f"{escape(decision.exclusion_reason or '')}</li>"
+        for decision in (qualification.rejected_noise if qualification else ())
+    ) or "<li>No deterministic noise was rejected.</li>"
+    return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Emerging Audience Portfolio</title>
   <style>
-    body { background: #f5f1e8; color: #17211c; font: 18px/1.6 Georgia, serif; margin: 0; }
-    main { margin: 10vh auto; max-width: 760px; padding: 3rem; background: #fff; border-top: 8px solid #c65d36; }
-    h1 { font-size: clamp(2rem, 6vw, 4rem); line-height: 1; margin-top: 0; }
-    .empty { border-left: 3px solid #c65d36; padding-left: 1rem; }
+    body {{ background: #f5f1e8; color: #17211c; font: 18px/1.6 Georgia, serif; margin: 0; }}
+    main {{ margin: 10vh auto; max-width: 760px; padding: 3rem; background: #fff; border-top: 8px solid #c65d36; }}
+    h1 {{ font-size: clamp(2rem, 6vw, 4rem); line-height: 1; margin-top: 0; }}
+    .notice {{ border-left: 3px solid #c65d36; padding-left: 1rem; }}
   </style>
 </head>
 <body><main>
   <p>Audience Trend Miner</p>
   <h1>Emerging Audience Portfolio</h1>
-  <p class="empty">No emerging audiences qualified for this run.</p>
+  <p class="notice">These are qualified attention signals, not yet accepted audiences.</p>
+  <h2>Qualified attention signals</h2>
+  <ul>{qualified_items}</ul>
+  <h2>Rejected deterministic noise</h2>
+  <ul>{noise_items}</ul>
+  <p>No emerging audiences qualified for this run.</p>
 </main></body>
 </html>
 """
