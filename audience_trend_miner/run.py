@@ -23,6 +23,7 @@ from audience_trend_miner.configuration import (
     load_run_configuration,
 )
 from audience_trend_miner.publication import PublicationInput, publish_run
+from audience_trend_miner.portfolio import PortfolioResult, build_portfolio
 from audience_trend_miner.refinement import (
     ClusterRefinementResult,
     refine_candidate_clusters,
@@ -138,6 +139,18 @@ def execute_run(
             ),
         )
 
+    portfolio = PortfolioResult((), ())
+    if refinement.accepted:
+        assert generator is not None
+        portfolio = build_portfolio(
+            refinement,
+            attention.canonical_articles,
+            generator,
+            sleep=(lambda _: None)
+            if isinstance(generator, FixtureStructuredGenerator)
+            else time.sleep,
+        )
+
     publication_path = str((output_directory / effective_run_id).resolve())
     job_store.reserve_publication_path(effective_run_id, publication_path)
     published = publish_run(
@@ -154,6 +167,7 @@ def execute_run(
             refinement=refinement,
             configuration=configuration.safe_provenance(),
             run_id=effective_run_id,
+            portfolio=portfolio,
         )
     )
     job_store.mark_publication_complete(effective_run_id, str(published.resolve()))

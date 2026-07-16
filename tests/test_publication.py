@@ -43,8 +43,9 @@ def publication_input(
         "sentence-transformers/all-mpnet-base-v2", 0.62, (), (), (), ()
     ),
     refinement: ClusterRefinementResult = ClusterRefinementResult((), (), ()),
+    portfolio=None,
 ) -> PublicationInput:
-    return PublicationInput(
+    values = dict(
         output_root=output_root,
         started_at=datetime(2026, 7, 16, 17, 30, 45, 123456, tzinfo=timezone.utc),
         as_of_argument=date(2026, 7, 16),
@@ -71,6 +72,9 @@ def publication_input(
         },
         run_id=None,
     )
+    if portfolio is not None:
+        values["portfolio"] = portfolio
+    return PublicationInput(**values)
 
 
 def refinement_audience(name: str, *page_ids: int) -> dict[str, object]:

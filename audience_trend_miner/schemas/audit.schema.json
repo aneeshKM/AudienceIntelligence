@@ -4,7 +4,7 @@
   "title": "Audience Trend Miner Audit",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "status", "degraded", "run", "decisions", "qualified_signals", "article_classifications", "candidate_clustering", "cluster_refinement", "failures"],
+  "required": ["schema_version", "status", "degraded", "run", "decisions", "qualified_signals", "article_classifications", "candidate_clustering", "cluster_refinement", "portfolio_assessments", "portfolio_calculations", "failures"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "status": {"enum": ["success", "failed"]},
@@ -24,6 +24,8 @@
     },
     "candidate_clustering": {"$ref": "#/$defs/candidateClustering"},
     "cluster_refinement": {"$ref": "#/$defs/clusterRefinement"},
+    "portfolio_assessments": {"type": "array"},
+    "portfolio_calculations": {"type": "array"},
     "failures": {
       "type": "array",
       "items": {"$ref": "#/$defs/failure"}
@@ -356,7 +358,7 @@
       "required": ["operation", "subject", "attempts", "reason"],
       "properties": {
         "operation": {
-          "enum": ["discovery", "pageviews", "metadata", "canonicalization", "cluster_refinement", "cluster_safety"]
+          "enum": ["discovery", "pageviews", "metadata", "canonicalization", "cluster_refinement", "cluster_safety", "portfolio_assessment"]
         },
         "subject": {"type": "string", "minLength": 1},
         "attempts": {"type": "integer", "minimum": 1, "maximum": 3},

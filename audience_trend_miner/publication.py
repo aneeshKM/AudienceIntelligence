@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from html import escape
 import json
+import re
 from pathlib import Path, PurePosixPath
 import tempfile
 from urllib.parse import quote
@@ -13,6 +14,7 @@ import jsonschema
 from audience_trend_miner.classification import ArticleClassification, ArticleClassificationResult
 from audience_trend_miner.clustering import CandidateClusteringResult
 from audience_trend_miner.refinement import ClusterRefinementResult
+from audience_trend_miner.portfolio import PortfolioAudience, PortfolioResult
 from audience_trend_miner.trends import TrendDecision, TrendQualificationResult
 from audience_trend_miner.wikimedia import AnalysisWindows, WikimediaAttentionResult
 
@@ -34,6 +36,7 @@ class PublicationInput:
     refinement: ClusterRefinementResult
     configuration: dict[str, str]
     run_id: str | None
+    portfolio: PortfolioResult = field(default_factory=lambda: PortfolioResult((), ()))
 
 
 def publish_run(publication: PublicationInput) -> Path:
@@ -106,7 +109,7 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
     portfolio = {
         "schema_version": "1.0",
         "as_of": publication.as_of.isoformat(),
-        "audiences": [],
+        "audiences": [_portfolio_record(item) for item in publication.portfolio.audiences],
     }
     audit = {
         "schema_version": "1.0",
@@ -126,19 +129,27 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
             json.dumps(asdict(publication.clustering))
         ),
         "cluster_refinement": json.loads(json.dumps(asdict(publication.refinement))),
+        "portfolio_assessments": json.loads(
+            json.dumps([asdict(item) for item in publication.portfolio.assessments])
+        ),
+        "portfolio_calculations": json.loads(
+            json.dumps([asdict(item) for item in publication.portfolio.audiences])
+        ),
         "failures": [],
     }
     audit.update(_attention_audit_data(publication.attention))
     audit["failures"].extend(_refinement_failure_records(publication.refinement))
+    portfolio_failures = _portfolio_failure_records(publication.portfolio)
+    audit["failures"].extend(portfolio_failures)
     audit["degraded"] = bool(audit["degraded"]) or _refinement_degraded(
         publication.refinement
-    )
+    ) or bool(portfolio_failures)
     _validate("portfolio.schema.json", portfolio)
     _validate("audit.schema.json", audit)
 
     artifacts = {
         "manifest.json": _json_text(manifest),
-        "portfolio.json": _json_text(portfolio),
+        "portfolio.json": _portfolio_json_text(portfolio),
         "audit.json": _json_text(audit),
         "report.html": _report(publication),
         "wikimedia/canonical_articles.json": _json_text(
@@ -161,6 +172,26 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
             raise ValueError(f"duplicate run artifact path: {relative_name}")
         artifacts[relative_name] = _json_text(raw_artifact.payload)
     return artifacts
+
+
+def _portfolio_record(audience: PortfolioAudience) -> dict[str, object]:
+    return {
+        "name": audience.name,
+        "description": audience.description,
+        "estimated_size_index": audience.estimated_size_index,
+        "potential_buying_power": audience.potential_buying_power,
+        "brand_categories": list(audience.brand_categories),
+        "buying_power_rationale": audience.buying_power_rationale,
+        "buying_power_scores": asdict(audience.buying_power_scores),
+    }
+
+
+def _portfolio_json_text(portfolio: dict[str, object]) -> str:
+    return re.sub(
+        r'("estimated_size_index": )([0-9]+(?:\.[0-9]+)?)',
+        lambda match: f"{match.group(1)}{float(match.group(2)):.2f}",
+        _json_text(portfolio),
+    )
 
 
 def _classification_audit_record(decision: ArticleClassification) -> dict[str, object]:
@@ -259,6 +290,19 @@ def _refinement_failure_records(
                     }
                 )
     return failures
+
+
+def _portfolio_failure_records(portfolio: PortfolioResult) -> list[dict[str, object]]:
+    return [
+        {
+            "operation": "portfolio_assessment",
+            "subject": f"component:{assessment.source_component_id}",
+            "attempts": len(assessment.attempts),
+            "reason": assessment.attempts[-1].error or "structured generation failed",
+        }
+        for assessment in portfolio.assessments
+        if assessment.attempts and not assessment.attempts[-1].validation_valid
+    ]
 
 
 def _raw_artifact_path(operation: str, subject: str) -> str:
@@ -375,13 +419,19 @@ def _report(publication: PublicationInput) -> str:
         if component.is_candidate_cluster
     ) or "<li>No multi-signal candidate clusters formed.</li>"
     accepted_audiences = "".join(
-        f"<li><strong>{escape(audience.name)}</strong> — "
-        + ", ".join(
-            escape(titles_by_page_id[page_id]) for page_id in audience.page_ids
-        )
-        + "</li>"
-        for audience in publication.refinement.accepted
-    ) or "<li>No candidate clusters passed refinement and safety review.</li>"
+        "<article class=\"audience\">"
+        f"<h2>{escape(audience.name)}</h2>"
+        f"<p>{escape(audience.description)}</p>"
+        f"<p><strong>Estimated Size Index:</strong> {audience.estimated_size_index:.2f}</p>"
+        f"<p><strong>Potential Buying Power:</strong> {escape(audience.potential_buying_power.title())}</p>"
+        f"<p><strong>Component scores:</strong> Purchase intent {audience.buying_power_scores.purchase_intent}/3; "
+        f"transaction value {audience.buying_power_scores.transaction_value}/3; category breadth "
+        f"{audience.buying_power_scores.category_breadth}/3; brand safety {audience.buying_power_scores.brand_safety}/3.</p>"
+        f"<p><strong>Relevant brand categories:</strong> {escape(', '.join(audience.brand_categories))}</p>"
+        f"<p>{escape(audience.buying_power_rationale)}</p>"
+        "</article>"
+        for audience in publication.portfolio.audiences
+    ) or "<p>No emerging audiences qualified for this run.</p>"
     singleton_signals = "".join(
         f"<li><strong>{escape(titles_by_page_id[component.page_ids[0]])}</strong></li>"
         for component in publication.clustering.components
@@ -412,7 +462,7 @@ def _report(publication: PublicationInput) -> str:
   <h2>Candidate clusters</h2>
   <ul>{candidate_clusters}</ul>
   <h2>Accepted refined audiences</h2>
-  <ul>{accepted_audiences}</ul>
+  {accepted_audiences}
   <h2>Standalone singleton signals</h2>
   <ul>{singleton_signals}</ul>
   <h2>Qualified attention signals</h2>
@@ -421,7 +471,6 @@ def _report(publication: PublicationInput) -> str:
   <ul>{noise_items}</ul>
   <h2>Rejected classifications</h2>
   <ul>{classification_rejections}</ul>
-  <p>No emerging audiences qualified for this run.</p>
 </main></body>
 </html>
 """
