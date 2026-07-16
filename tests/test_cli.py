@@ -5,10 +5,17 @@ import sys
 import tempfile
 import unittest
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import jsonschema
+
+
+def empty_run_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["AUDIENCE_TREND_MINER_WIKIMEDIA_BASE_URL"] = ""
+    return environment
 
 
 class CliRunContractTest(unittest.TestCase):
@@ -27,6 +34,7 @@ class CliRunContractTest(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                env=empty_run_environment(),
             )
 
             run_directories = list(Path(output_dir).iterdir())
@@ -51,6 +59,7 @@ class CliRunContractTest(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                env=empty_run_environment(),
             )
             run_directory = next(Path(output_dir).iterdir())
             manifest = json.loads((run_directory / "manifest.json").read_text())
@@ -87,6 +96,7 @@ class CliRunContractTest(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                env=empty_run_environment(),
             )
             run_directory = next(Path(output_dir).iterdir())
             portfolio = json.loads((run_directory / "portfolio.json").read_text())
@@ -123,6 +133,7 @@ class CliRunContractTest(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                env=empty_run_environment(),
             )
             utc_date_after = datetime.now(timezone.utc).date().isoformat()
             run_directory = next(Path(output_dir).iterdir())

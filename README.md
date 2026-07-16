@@ -1,8 +1,9 @@
 # AudienceIntelligence
 
 Audience Trend Miner turns public attention signals into an Emerging Audience
-Portfolio. The first executable slice establishes a reproducible CLI run and
-produces a valid empty portfolio without fabricating audiences.
+Portfolio. A run discovers the complete current-window candidate universe from
+English Wikipedia, retrieves exact traffic across both analysis windows, and
+canonicalizes aliases without fabricating audiences.
 
 ## Install on macOS
 
@@ -31,6 +32,16 @@ timestamped directory containing:
 - `portfolio.json` — schema-valid Emerging Audience Portfolio
 - `report.html` — static report, including a valid empty state
 - `audit.json` — run status, decisions, and failures
+- `wikimedia/` — saved discovery, Pageviews, metadata, and canonical artifacts
+
+Discovery uses Wikimedia's public APIs by default. If any daily top-page
+response is still unavailable after three attempts, the command exits without
+creating a partial run directory.
+
+Deterministic integration runs can select the fixture adapter with
+`AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE=/path/to/fixture.json`. The fixture is
+one logical dataset containing `discovery`, `pageviews`, and `metadata`; it does
+not reproduce Wikimedia URL paths.
 
 The current and previous analysis windows are complete seven-day periods. The
 current window ends two days before the effective as-of date.

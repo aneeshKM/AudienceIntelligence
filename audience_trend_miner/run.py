@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import jsonschema
+
+from audience_trend_miner.wikimedia import (
+    AnalysisWindows,
+    FixtureWikimediaAdapter,
+    HttpWikimediaAdapter,
+    acquire_wikimedia_attention,
+)
 
 
 SCHEMA_DIRECTORY = Path(__file__).with_name("schemas")
 
 
 def execute_run(as_of_argument: date | None, output_directory: Path) -> Path:
-    """Create a successful empty Audience Trend Miner run."""
+    """Acquire attention signals and publish an Audience Trend Miner run."""
     started_at = datetime.now(timezone.utc)
     as_of = as_of_argument or started_at.date()
     current_end = as_of - timedelta(days=2)
@@ -44,6 +52,34 @@ def execute_run(as_of_argument: date | None, output_directory: Path) -> Path:
         "decisions": [],
         "failures": [],
     }
+    wikimedia_artifacts: dict[str, object] = {}
+    fixture_path = os.environ.get("AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE")
+    rest_base_url = os.environ.get("AUDIENCE_TREND_MINER_WIKIMEDIA_BASE_URL")
+    if fixture_path:
+        adapter = FixtureWikimediaAdapter.from_file(Path(fixture_path))
+    elif rest_base_url != "":
+        adapter = (
+            HttpWikimediaAdapter(rest_base_url=rest_base_url)
+            if rest_base_url
+            else HttpWikimediaAdapter()
+        )
+    else:
+        adapter = None
+
+    if adapter is not None:
+        attention = acquire_wikimedia_attention(
+            AnalysisWindows(
+                previous_start=previous_start,
+                previous_end=previous_end,
+                current_start=current_start,
+                current_end=current_end,
+            ),
+            adapter,
+        )
+        audit.update(attention.audit_data())
+        wikimedia_artifacts = {
+            artifact.name: artifact.payload for artifact in attention.raw_artifacts
+        }
 
     _validate("portfolio.schema.json", portfolio)
     _validate("audit.schema.json", audit)
@@ -54,6 +90,17 @@ def execute_run(as_of_argument: date | None, output_directory: Path) -> Path:
     _write_json(run_directory / "manifest.json", manifest)
     _write_json(run_directory / "portfolio.json", portfolio)
     _write_json(run_directory / "audit.json", audit)
+    if "canonical_articles" in audit:
+        wikimedia_directory = run_directory / "wikimedia"
+        wikimedia_directory.mkdir()
+        _write_json(
+            wikimedia_directory / "canonical_articles.json",
+            audit["canonical_articles"],
+        )
+        for relative_path, artifact in wikimedia_artifacts.items():
+            artifact_path = wikimedia_directory / relative_path
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(artifact_path, artifact)
     (run_directory / "report.html").write_text(_empty_report(), encoding="utf-8")
     return run_directory
 
