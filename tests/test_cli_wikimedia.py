@@ -108,6 +108,8 @@ class CliWikimediaTest(unittest.TestCase):
             classification_path.write_text(json.dumps({"responses": responses}))
             output_directory = temporary_path / "runs"
             environment = os.environ.copy()
+            environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
+            environment["AUDIENCE_TREND_MINER_TEST_MODE"] = "1"
             environment["AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE"] = str(
                 wikimedia_path
             )
@@ -173,6 +175,8 @@ class CliWikimediaTest(unittest.TestCase):
             )
             output_directory = temporary_path / "runs"
             environment = os.environ.copy()
+            environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
+            environment["AUDIENCE_TREND_MINER_TEST_MODE"] = "1"
             environment["AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE"] = str(
                 wikimedia_path
             )
@@ -212,7 +216,10 @@ class CliWikimediaTest(unittest.TestCase):
             fixture_path.write_text(json.dumps(fixture_payload()))
             output_directory = temporary_path / "runs"
             environment = os.environ.copy()
+            environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
+            environment["AUDIENCE_TREND_MINER_TEST_MODE"] = "1"
             environment["AUDIENCE_TREND_MINER_WIKIMEDIA_BASE_URL"] = ""
+            environment["GROQ_API_KEY"] = "test-key"
             environment["AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE"] = str(fixture_path)
 
             completed = subprocess.run(
@@ -253,7 +260,10 @@ class CliWikimediaTest(unittest.TestCase):
             fixture_path.write_text(json.dumps(payload))
             output_directory = temporary_path / "runs"
             environment = os.environ.copy()
+            environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
+            environment["AUDIENCE_TREND_MINER_TEST_MODE"] = "1"
             environment["AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE"] = str(fixture_path)
+            environment["GROQ_API_KEY"] = "test-key"
 
             completed = subprocess.run(
                 [

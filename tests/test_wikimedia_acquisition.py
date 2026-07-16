@@ -90,13 +90,13 @@ class CanonicalArticleAggregationTest(unittest.TestCase):
             date(2026, 7, 14),
         )
         self.assertEqual(
-            {artifact.name for artifact in result.raw_artifacts},
+            {(artifact.operation, artifact.subject) for artifact in result.raw_artifacts},
             {
-                *(f"discovery/{date(2026, 7, 8) + timedelta(days=offset)}.json" for offset in range(7)),
-                "pageviews/Alias_A.json",
-                "pageviews/Canonical_A.json",
-                "metadata/Alias_A.json",
-                "metadata/Canonical_A.json",
+                *(("discovery", str(date(2026, 7, 8) + timedelta(days=offset))) for offset in range(7)),
+                ("pageviews", "Alias_A"),
+                ("pageviews", "Canonical_A"),
+                ("metadata", "Alias_A"),
+                ("metadata", "Canonical_A"),
             },
         )
 
@@ -213,12 +213,12 @@ class AliasEvidenceAcquisitionTest(unittest.TestCase):
         self.assertEqual(result.canonical_articles, ())
         self.assertEqual(result.failures[0].operation, "metadata")
         self.assertIn(
-            "pageviews/Broken_Metadata.json",
-            {artifact.name for artifact in result.raw_artifacts},
+            ("pageviews", "Broken_Metadata"),
+            {(artifact.operation, artifact.subject) for artifact in result.raw_artifacts},
         )
         self.assertNotIn(
-            "metadata/Broken_Metadata.json",
-            {artifact.name for artifact in result.raw_artifacts},
+            ("metadata", "Broken_Metadata"),
+            {(artifact.operation, artifact.subject) for artifact in result.raw_artifacts},
         )
 
     def test_incomplete_daily_pageviews_are_rejected_as_an_article_failure(self) -> None:

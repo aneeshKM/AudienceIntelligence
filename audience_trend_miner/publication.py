@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from html import escape
 import json
 from pathlib import Path, PurePosixPath
 import tempfile
+from urllib.parse import quote
 
 import jsonschema
 
-from audience_trend_miner.classification import ArticleClassificationResult
+from audience_trend_miner.classification import ArticleClassification, ArticleClassificationResult
 from audience_trend_miner.trends import TrendDecision, TrendQualificationResult
 from audience_trend_miner.wikimedia import AnalysisWindows, WikimediaAttentionResult
 
@@ -27,15 +28,23 @@ class PublicationInput:
     attention: WikimediaAttentionResult
     qualification: TrendQualificationResult
     classification: ArticleClassificationResult
+    configuration: dict[str, str]
+    run_id: str | None
 
 
 def publish_run(publication: PublicationInput) -> Path:
     """Atomically publish one complete run from finished domain results."""
     artifacts = _assemble_artifacts(publication)
     publication.output_root.mkdir(parents=True, exist_ok=True)
-    final_directory = publication.output_root / publication.started_at.strftime(
+    directory_name = publication.run_id or publication.started_at.strftime(
         "%Y%m%dT%H%M%S%fZ"
     )
+    if not directory_name or directory_name in {".", ".."} or "/" in directory_name:
+        raise ValueError("run_id must be one safe path segment")
+    final_directory = publication.output_root / directory_name
+    if final_directory.is_dir():
+        _verify_existing_publication(final_directory, publication)
+        return final_directory
     with tempfile.TemporaryDirectory(
         dir=publication.output_root,
         prefix=".publication-",
@@ -45,8 +54,30 @@ def publish_run(publication: PublicationInput) -> Path:
             artifact_path = staging_directory / relative_name
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
             artifact_path.write_text(content, encoding="utf-8")
-        staging_directory.rename(final_directory)
+        (staging_directory / ".complete").write_text("complete\n", encoding="utf-8")
+        try:
+            staging_directory.rename(final_directory)
+        except FileExistsError:
+            _verify_existing_publication(final_directory, publication)
     return final_directory
+
+
+def _verify_existing_publication(
+    directory: Path, publication: PublicationInput
+) -> None:
+    try:
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("existing run directory is incomplete") from error
+    required = {"manifest.json", "audit.json", "portfolio.json", "report.html", ".complete"}
+    if not all((directory / name).is_file() for name in required):
+        raise ValueError("existing run directory is incomplete")
+    if (
+        manifest.get("run_id") != publication.run_id
+        or manifest.get("configuration") != publication.configuration
+        or manifest.get("as_of") != publication.as_of.isoformat()
+    ):
+        raise ValueError("existing run directory belongs to different run facts")
 
 
 def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
@@ -65,6 +96,8 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
             "start": publication.windows.previous_start.isoformat(),
             "end": publication.windows.previous_end.isoformat(),
         },
+        "configuration": publication.configuration,
+        "run_id": publication.run_id,
     }
     portfolio = {
         "schema_version": "1.0",
@@ -82,11 +115,12 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         ],
         "qualified_signals": _accepted_signal_records(publication),
         "article_classifications": [
-            decision.audit_data() for decision in publication.classification.decisions
+            _classification_audit_record(decision)
+            for decision in publication.classification.decisions
         ],
         "failures": [],
     }
-    audit.update(publication.attention.audit_data())
+    audit.update(_attention_audit_data(publication.attention))
     _validate("portfolio.schema.json", portfolio)
     _validate("audit.schema.json", audit)
 
@@ -104,11 +138,56 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
             audit["article_classifications"]
         )
     for raw_artifact in publication.attention.raw_artifacts:
-        relative_name = _raw_artifact_path(raw_artifact.name)
+        relative_name = _raw_artifact_path(
+            raw_artifact.operation, raw_artifact.subject
+        )
         if relative_name in artifacts:
             raise ValueError(f"duplicate run artifact path: {relative_name}")
         artifacts[relative_name] = _json_text(raw_artifact.payload)
     return artifacts
+
+
+def _classification_audit_record(decision: ArticleClassification) -> dict[str, object]:
+    return {
+        "page_id": decision.page_id,
+        "canonical_title": decision.canonical_title,
+        "prompt": decision.prompt,
+        "accepted": decision.accepted,
+        "decision_reason": decision.decision_reason,
+        "judgment": asdict(decision.judgment) if decision.judgment else None,
+        "attempts": [asdict(attempt) for attempt in decision.attempts],
+    }
+
+
+def _attention_audit_data(attention: WikimediaAttentionResult) -> dict[str, object]:
+    return {
+        "raw_candidate_titles": list(attention.raw_candidate_titles),
+        "canonical_articles": [
+            {
+                "page_id": article.page_id,
+                "canonical_title": article.canonical_title,
+                "extract": article.extract,
+                "categories": list(article.categories),
+                "previous_window_views": article.previous_window_views,
+                "current_window_views": article.current_window_views,
+                "aliases": [
+                    {
+                        "raw_title": alias.raw_title,
+                        "previous_window_views": alias.previous_window_views,
+                        "current_window_views": alias.current_window_views,
+                        "daily_views": [
+                            {"date": item.date.isoformat(), "views": item.views}
+                            for item in alias.daily_views
+                        ],
+                    }
+                    for alias in article.aliases
+                ],
+            }
+            for article in attention.canonical_articles
+        ],
+        "failures": [asdict(failure) for failure in attention.failures],
+        "degraded": attention.degraded,
+    }
 
 
 def _accepted_signal_records(publication: PublicationInput) -> list[dict[str, object]]:
@@ -122,11 +201,11 @@ def _accepted_signal_records(publication: PublicationInput) -> list[dict[str, ob
     ]
 
 
-def _raw_artifact_path(name: str) -> str:
-    relative = PurePosixPath(name)
-    if relative.is_absolute() or ".." in relative.parts or not relative.name:
-        raise ValueError(f"invalid raw artifact path: {name}")
-    return str(PurePosixPath("wikimedia") / relative)
+def _raw_artifact_path(operation: str, subject: str) -> str:
+    if operation not in {"discovery", "pageviews", "metadata"} or not subject:
+        raise ValueError("invalid raw evidence identity")
+    filename = quote(subject, safe="") + ".json"
+    return str(PurePosixPath("wikimedia") / operation / filename)
 
 
 def _validate(schema_name: str, artifact: object) -> None:

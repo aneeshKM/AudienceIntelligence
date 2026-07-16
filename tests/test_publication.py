@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -47,6 +48,13 @@ def publication_input(
         attention=attention,
         qualification=qualification,
         classification=classification,
+        configuration={
+            "model": "fixture/model",
+            "classification_mode": "fixture",
+            "wikimedia_mode": "fixture",
+            "database_host": "localhost",
+        },
+        run_id=None,
     )
 
 
@@ -65,6 +73,7 @@ class RunPublicationTest(unittest.TestCase):
                     "audit.json",
                     "report.html",
                     "wikimedia",
+                    ".complete",
                 },
             )
             manifest = json.loads((published / "manifest.json").read_text())
@@ -83,6 +92,25 @@ class RunPublicationTest(unittest.TestCase):
         self.assertEqual(manifest["current_window"]["start"], "2026-07-08")
         self.assertEqual(portfolio["audiences"], [])
         self.assertEqual(audit["qualified_signals"], [])
+
+    def test_stable_run_id_publishes_at_most_one_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            input_data = publication_input(Path(temporary_directory) / "runs")
+            input_data = replace(input_data, run_id="stable-run")
+
+            first = publish_run(input_data)
+            second = publish_run(input_data)
+
+            self.assertEqual(first, second)
+            self.assertEqual(first.name, "stable-run")
+            self.assertEqual(len(list(first.parent.iterdir())), 1)
+
+            with self.assertRaisesRegex(ValueError, "different run facts"):
+                publish_run(replace(input_data, as_of=date(2026, 7, 17)))
+
+            (first / ".complete").unlink()
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                publish_run(input_data)
 
     def test_publishes_degraded_qualified_signals_with_alias_lineage_and_evidence(self) -> None:
         daily_views = tuple(
@@ -116,7 +144,7 @@ class RunPublicationTest(unittest.TestCase):
             raw_candidate_titles=("Broken_Alias", "Main_Page", "Signal_Alias"),
             canonical_articles=(noise, article),
             raw_artifacts=(
-                RawArtifact("metadata/Signal_Alias.json", {"page_id": 42}),
+                RawArtifact("metadata", "Signal_Alias", {"page_id": 42}),
             ),
             failures=(
                 AcquisitionFailure("metadata", "Broken_Alias", 3, "unavailable"),
@@ -158,23 +186,22 @@ class RunPublicationTest(unittest.TestCase):
         self.assertIn("Main Page", report)
         self.assertIn("not yet accepted audiences", report)
 
-    def test_failed_staging_leaves_no_completed_or_temporary_run(self) -> None:
+    def test_duplicate_evidence_identity_leaves_no_run_output(self) -> None:
         attention = WikimediaAttentionResult(
             raw_candidate_titles=(),
             canonical_articles=(),
             raw_artifacts=(
-                RawArtifact("metadata", {}),
-                RawArtifact("metadata/Signal.json", {}),
+                RawArtifact("metadata", "Signal", {}),
+                RawArtifact("metadata", "Signal", {}),
             ),
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_root = Path(temporary_directory) / "runs"
 
-            with self.assertRaises(OSError):
+            with self.assertRaises(ValueError):
                 publish_run(publication_input(output_root, attention=attention))
 
-            self.assertTrue(output_root.is_dir())
-            self.assertEqual(list(output_root.iterdir()), [])
+            self.assertFalse(output_root.exists())
 
     def test_retains_only_accepted_articles_and_publishes_complete_classification_evidence(self) -> None:
         accepted_article = _qualified_article(42, "Home espresso")

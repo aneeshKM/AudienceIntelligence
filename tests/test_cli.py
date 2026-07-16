@@ -12,6 +12,8 @@ from pathlib import Path
 def empty_run_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment["AUDIENCE_TREND_MINER_WIKIMEDIA_BASE_URL"] = ""
+    environment["GROQ_API_KEY"] = "test-key"
+    environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
     return environment
 
 
@@ -74,6 +76,13 @@ class CliRunContractTest(unittest.TestCase):
                         "start": "2026-07-01",
                         "end": "2026-07-07",
                     },
+                    "configuration": {
+                        "model": "openai/gpt-oss-120b",
+                        "classification_mode": "live",
+                        "wikimedia_mode": "disabled",
+                        "database_host": "localhost",
+                    },
+                    "run_id": run_directory.name,
                 },
                 completed.stderr,
             )

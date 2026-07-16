@@ -55,7 +55,8 @@ class CanonicalArticle:
 
 @dataclass(frozen=True)
 class RawArtifact:
-    name: str
+    operation: str
+    subject: str
     payload: object
 
 
@@ -106,45 +107,6 @@ class WikimediaAttentionResult:
     def degraded(self) -> bool:
         return bool(self.failures)
 
-    def audit_data(self) -> dict[str, object]:
-        return {
-            "raw_candidate_titles": list(self.raw_candidate_titles),
-            "canonical_articles": [
-                {
-                    "page_id": article.page_id,
-                    "canonical_title": article.canonical_title,
-                    "extract": article.extract,
-                    "categories": list(article.categories),
-                    "previous_window_views": article.previous_window_views,
-                    "current_window_views": article.current_window_views,
-                    "aliases": [
-                        {
-                            "raw_title": alias.raw_title,
-                            "previous_window_views": alias.previous_window_views,
-                            "current_window_views": alias.current_window_views,
-                            "daily_views": [
-                                {"date": item.date.isoformat(), "views": item.views}
-                                for item in alias.daily_views
-                            ],
-                        }
-                        for alias in article.aliases
-                    ],
-                }
-                for article in self.canonical_articles
-            ],
-            "failures": [
-                {
-                    "operation": failure.operation,
-                    "subject": failure.subject,
-                    "attempts": failure.attempts,
-                    "reason": failure.reason,
-                }
-                for failure in self.failures
-            ],
-            "degraded": self.degraded,
-        }
-
-
 @dataclass(frozen=True)
 class DiscoveryResponse:
     titles: tuple[str, ...]
@@ -173,19 +135,26 @@ class _CandidateUniverse:
 
 
 @dataclass(frozen=True)
-class _AliasEvidence:
+class AliasEvidence:
     traffic: AliasTraffic
     metadata: MetadataResponse
     artifacts: tuple[RawArtifact, ...]
 
 
 @dataclass(frozen=True)
-class _AliasEvidenceFailure:
+class AliasEvidenceFailure:
     failure: AcquisitionFailure
     artifacts: tuple[RawArtifact, ...]
 
 
-type _AliasAcquisition = _AliasEvidence | _AliasEvidenceFailure
+type AliasAcquisition = AliasEvidence | AliasEvidenceFailure
+
+
+@dataclass(frozen=True)
+class WikimediaEvidence:
+    raw_candidate_titles: tuple[str, ...]
+    aliases: tuple[AliasAcquisition, ...]
+    raw_artifacts: tuple[RawArtifact, ...]
 
 
 @dataclass(frozen=True)
@@ -212,7 +181,7 @@ class UrllibJsonTransport:
     def get_json(self, url: str) -> object:
         try:
             request = Request(url, headers={"User-Agent": USER_AGENT})
-            with urlopen(request) as response:
+            with urlopen(request, timeout=30) as response:
                 return json.load(response)
         except HTTPError as error:
             if error.code == 429 or error.code >= 500:
@@ -372,6 +341,15 @@ def acquire_wikimedia_attention(
     adapter: WikimediaAdapter,
     settings: AcquisitionSettings = AcquisitionSettings(),
 ) -> WikimediaAttentionResult:
+    return transform_wikimedia_attention(
+        fetch_wikimedia_evidence(windows, adapter, settings)
+    )
+
+def fetch_wikimedia_evidence(
+    windows: AnalysisWindows,
+    adapter: WikimediaAdapter,
+    settings: AcquisitionSettings = AcquisitionSettings(),
+) -> WikimediaEvidence:
     universe = _discover_candidate_universe(windows, adapter, settings)
     alias_results = _acquire_aliases(
         universe.raw_titles,
@@ -379,18 +357,9 @@ def acquire_wikimedia_attention(
         adapter,
         settings,
     )
-    evidence = tuple(
-        result for result in alias_results if isinstance(result, _AliasEvidence)
-    )
-    alias_failures = tuple(
-        result.failure
-        for result in alias_results
-        if isinstance(result, _AliasEvidenceFailure)
-    )
-    canonical = _form_canonical_articles(evidence)
-    return WikimediaAttentionResult(
+    return WikimediaEvidence(
         raw_candidate_titles=universe.raw_titles,
-        canonical_articles=canonical.articles,
+        aliases=alias_results,
         raw_artifacts=(
             *universe.artifacts,
             *(
@@ -399,7 +368,24 @@ def acquire_wikimedia_attention(
                 for artifact in result.artifacts
             ),
         ),
-        failures=(*alias_failures, *canonical.failures),
+    )
+
+
+def transform_wikimedia_attention(evidence: WikimediaEvidence) -> WikimediaAttentionResult:
+    successful = tuple(
+        result for result in evidence.aliases if isinstance(result, AliasEvidence)
+    )
+    failures = tuple(
+        result.failure
+        for result in evidence.aliases
+        if isinstance(result, AliasEvidenceFailure)
+    )
+    canonical = _form_canonical_articles(successful)
+    return WikimediaAttentionResult(
+        raw_candidate_titles=evidence.raw_candidate_titles,
+        canonical_articles=canonical.articles,
+        raw_artifacts=evidence.raw_artifacts,
+        failures=(*failures, *canonical.failures),
     )
 
 
@@ -426,7 +412,7 @@ def _discover_candidate_universe(
                 )
             ) from error
         titles.update(response.titles)
-        artifacts.append(RawArtifact(f"discovery/{day.isoformat()}.json", response.raw))
+        artifacts.append(RawArtifact("discovery", day.isoformat(), response.raw))
         day += timedelta(days=1)
     return _CandidateUniverse(tuple(sorted(titles)), tuple(artifacts))
 
@@ -436,7 +422,7 @@ def _acquire_aliases(
     windows: AnalysisWindows,
     adapter: WikimediaAdapter,
     settings: AcquisitionSettings,
-) -> tuple[_AliasAcquisition, ...]:
+) -> tuple[AliasAcquisition, ...]:
     with ThreadPoolExecutor(max_workers=settings.max_concurrent_articles) as executor:
         return tuple(
             executor.map(
@@ -447,9 +433,9 @@ def _acquire_aliases(
 
 
 def _form_canonical_articles(
-    evidence: tuple[_AliasEvidence, ...],
+    evidence: tuple[AliasEvidence, ...],
 ) -> _CanonicalFormation:
-    grouped: dict[int, list[_AliasEvidence]] = {}
+    grouped: dict[int, list[AliasEvidence]] = {}
     for alias_evidence in evidence:
         grouped.setdefault(alias_evidence.metadata.page_id, []).append(alias_evidence)
 
@@ -515,7 +501,7 @@ def _acquire_alias(
     windows: AnalysisWindows,
     adapter: WikimediaAdapter,
     settings: AcquisitionSettings,
-) -> _AliasAcquisition:
+) -> AliasAcquisition:
     expected_dates = tuple(
         windows.previous_start + timedelta(days=offset)
         for offset in range((windows.current_end - windows.previous_start).days + 1)
@@ -536,7 +522,7 @@ def _acquire_alias(
     try:
         pageviews = _attempt(fetch_complete_pageviews, settings)
     except (WikimediaTransientError, WikimediaPermanentError) as error:
-        return _AliasEvidenceFailure(
+        return AliasEvidenceFailure(
             failure=AcquisitionFailure(
                 operation="pageviews",
                 subject=raw_title,
@@ -545,16 +531,13 @@ def _acquire_alias(
             ),
             artifacts=(),
         )
-    pageviews_artifact = RawArtifact(
-        f"pageviews/{_evidence_subject(raw_title)}.json",
-        pageviews.raw,
-    )
+    pageviews_artifact = RawArtifact("pageviews", raw_title, pageviews.raw)
     try:
         metadata = _attempt(
             lambda: adapter.article_metadata(raw_title), settings
         )
     except (WikimediaTransientError, WikimediaPermanentError) as error:
-        return _AliasEvidenceFailure(
+        return AliasEvidenceFailure(
             failure=AcquisitionFailure(
                 operation="metadata",
                 subject=raw_title,
@@ -573,7 +556,7 @@ def _acquire_alias(
         for item in pageviews.daily_views
         if windows.current_start <= item.date <= windows.current_end
     )
-    return _AliasEvidence(
+    return AliasEvidence(
         traffic=AliasTraffic(
             raw_title=raw_title,
             previous_window_views=previous_views,
@@ -584,12 +567,9 @@ def _acquire_alias(
         artifacts=(
             pageviews_artifact,
             RawArtifact(
-                f"metadata/{_evidence_subject(raw_title)}.json",
+                "metadata",
+                raw_title,
                 metadata.raw,
             ),
         ),
     )
-
-
-def _evidence_subject(raw_title: str) -> str:
-    return raw_title.replace("/", "%2F")

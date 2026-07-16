@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -11,10 +11,10 @@ from urllib import request
 
 import jsonschema
 
+from audience_trend_miner.configuration import DEFAULT_MODEL
 from audience_trend_miner.wikimedia import CanonicalArticle
 
 
-DEFAULT_MODEL = "openai/gpt-oss-120b"
 REJECTION_CLASSES = (
     "accepted",
     "tragedy",
@@ -88,18 +88,6 @@ class ArticleClassification:
     decision_reason: str
     judgment: ArticleJudgment | None
     attempts: tuple[ClassificationAttempt, ...]
-
-    def audit_data(self) -> dict[str, object]:
-        return {
-            "page_id": self.page_id,
-            "canonical_title": self.canonical_title,
-            "prompt": self.prompt,
-            "accepted": self.accepted,
-            "decision_reason": self.decision_reason,
-            "judgment": asdict(self.judgment) if self.judgment else None,
-            "attempts": [asdict(attempt) for attempt in self.attempts],
-        }
-
 
 @dataclass(frozen=True)
 class ArticleClassificationResult:
@@ -201,7 +189,9 @@ class GroqStructuredGenerator:
         base_url: str = "https://api.groq.com/openai/v1/chat/completions",
     ) -> None:
         self.api_key = api_key or os.environ.get("GROQ_API_KEY", "")
-        self.model = model or os.environ.get("AUDIENCE_TREND_MINER_MODEL", DEFAULT_MODEL)
+        self.model = (
+            model or os.environ.get("AUDIENCE_TREND_MINER_MODEL") or DEFAULT_MODEL
+        )
         self.base_url = base_url
 
     def generate(self, prompt: str, schema: dict[str, object]) -> object:

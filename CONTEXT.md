@@ -16,6 +16,35 @@ The dated Pageviews observations and derived previous/current window totals belo
 
 The operation that builds a Candidate Universe, retrieves exact Alias Traffic and Wikipedia metadata, resolves Canonical Articles, aggregates aliases, and returns traceable raw evidence and structured failures. It does not publish run artifacts.
 
+## Effective Run Configuration
+
+The immutable, non-secret facts resolved exactly once when a run starts. Shell
+values take precedence over `.env` values, which take precedence over global
+defaults. A normal run requires live LLM credentials; explicit test and CI runs
+may select fixture adapters. Run artifacts record safe provenance such as model
+name and adapter modes, never credentials, local paths, or secret-source details.
+
+## Wikimedia Evidence Fetching
+
+The resumable operation that completes discovery and retrieves raw Pageviews and
+metadata evidence without forming Alias Traffic or Canonical Articles. Fetch jobs
+are run-scoped, idempotent, and leased through PostgreSQL. Raw Wikimedia evidence
+and terminal failures are persisted so work can resume after interruption.
+
+## Wikimedia Attention Transformation
+
+The deterministic operation that consumes persisted Wikimedia evidence, derives
+Alias Traffic, and forms Canonical Articles. Alias transformations may proceed as
+their evidence becomes ready; Canonical Article formation waits until every alias
+in the Candidate Universe has completed or permanently failed.
+
+## Evidence Job
+
+One PostgreSQL-backed, run-scoped item of Wikimedia fetching or transformation
+work. An Evidence Job is claimed with an expiring lease, has a bounded attempt
+history, and is uniquely identified within its run so resumed workers cannot
+duplicate completed work.
+
 ## Qualified Signal
 
 A Canonical Article whose aggregated current-window traffic is at least 100,000, exceeds its previous-window traffic, has a positive capped scale-and-acceleration score, and is not explicit deterministic noise. A Qualified Signal is an input to later audience formation; it is not itself an accepted audience.

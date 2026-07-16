@@ -30,6 +30,13 @@ Supply an analysis date for a reproducible run:
 audience-trend-miner --as-of 2026-07-16 --output-dir runs
 ```
 
+Use a stable run identifier to resume interrupted Wikimedia work without
+refetching completed evidence:
+
+```bash
+audience-trend-miner --as-of 2026-07-16 --run-id july-16 --output-dir runs
+```
+
 `--as-of` defaults to the current UTC date. Each invocation creates a
 timestamped directory containing:
 
@@ -50,6 +57,12 @@ Discovery uses Wikimedia's public APIs by default. If any daily top-page
 response is still unavailable after three attempts, the command exits without
 creating a partial run directory.
 
+Wikimedia fetching and deterministic transformation communicate through leased,
+idempotent PostgreSQL jobs. Set `DATABASE_URL` to the PostgreSQL database used
+for run state and raw `JSONB` evidence. Fetch and transformation workers overlap;
+Canonical Article formation waits until every Candidate Universe alias reaches a
+terminal state.
+
 Deterministic integration runs can select the fixture adapter with
 `AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE=/path/to/fixture.json`. The fixture is
 one logical dataset containing `discovery`, `pageviews`, and `metadata`; it does
@@ -65,6 +78,17 @@ runs. The default model is `openai/gpt-oss-120b`; override it with
 `responses` array. Invalid output and request failures are retried three total
 times with exponential backoff and jitter, then rejected with their evidence
 preserved in the audit.
+
+For local development, copy `.env.example` to `.env` and set both values there:
+
+```dotenv
+GROQ_API_KEY=your-real-key
+AUDIENCE_TREND_MINER_MODEL=openai/gpt-oss-120b
+DATABASE_URL=postgresql://localhost/audience_intelligence
+```
+
+The `.env` file is ignored by Git. Values exported in the shell take precedence,
+and the global `DEFAULT_MODEL` in `configuration.py` remains the final fallback.
 
 ## Test
 

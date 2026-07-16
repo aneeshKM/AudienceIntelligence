@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Build emerging audience portfolios from public attention signals."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["jsonschema>=4.23,<5"]
+dependencies = ["jsonschema>=4.23,<5", "psycopg[binary]>=3.2,<4"]
 
 [project.scripts]
 audience-trend-miner = "audience_trend_miner.__main__:main"
