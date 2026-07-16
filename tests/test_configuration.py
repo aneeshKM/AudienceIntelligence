@@ -47,6 +47,9 @@ class EffectiveRunConfigurationTest(unittest.TestCase):
                 "classification_mode": "fixture",
                 "wikimedia_mode": "fixture",
                 "database_host": "localhost",
+                "embedding_model": "sentence-transformers/all-mpnet-base-v2",
+                "similarity_threshold": "0.62",
+                "embedding_mode": "local",
             },
         )
 

@@ -14,6 +14,11 @@ from audience_trend_miner.classification import (
     ArticleClassificationResult,
     classify_articles,
 )
+from audience_trend_miner.clustering import (
+    CandidateClusteringResult,
+    FrozenEmbeddingAdapter,
+    form_candidate_clusters,
+)
 from tests.test_article_classification import ScriptedGenerator, judgment
 from audience_trend_miner.trends import TrendQualificationResult, qualify_trends
 from audience_trend_miner.wikimedia import (
@@ -33,6 +38,9 @@ def publication_input(
     attention: WikimediaAttentionResult = WikimediaAttentionResult((), (), ()),
     qualification: TrendQualificationResult = TrendQualificationResult((), (), ()),
     classification: ArticleClassificationResult = ArticleClassificationResult((), (), ()),
+    clustering: CandidateClusteringResult = CandidateClusteringResult(
+        "sentence-transformers/all-mpnet-base-v2", 0.62, (), (), (), ()
+    ),
 ) -> PublicationInput:
     return PublicationInput(
         output_root=output_root,
@@ -48,11 +56,15 @@ def publication_input(
         attention=attention,
         qualification=qualification,
         classification=classification,
+        clustering=clustering,
         configuration={
             "model": "fixture/model",
             "classification_mode": "fixture",
             "wikimedia_mode": "fixture",
             "database_host": "localhost",
+            "embedding_model": "sentence-transformers/all-mpnet-base-v2",
+            "similarity_threshold": "0.62",
+            "embedding_mode": "fixture",
         },
         run_id=None,
     )
@@ -73,6 +85,7 @@ class RunPublicationTest(unittest.TestCase):
                     "audit.json",
                     "report.html",
                     "wikimedia",
+                    "clustering",
                     ".complete",
                 },
             )
@@ -251,6 +264,50 @@ class RunPublicationTest(unittest.TestCase):
         qualified_section = report.split("<h2>Rejected classifications</h2>", 1)[0]
         self.assertIn("Home espresso", qualified_section)
         self.assertNotIn("Election result", qualified_section)
+
+    def test_publishes_candidate_components_as_auditable_non_audience_results(self) -> None:
+        first = _qualified_article(42, "Running shoes")
+        second = _qualified_article(43, "Marathon training")
+        singleton = _qualified_article(44, "Home espresso")
+        qualification = qualify_trends((first, second, singleton))
+        classification = classify_articles(
+            (first, second, singleton),
+            ScriptedGenerator(judgment(), judgment(), judgment()),
+            sleep=lambda _: None,
+        )
+        clustering = form_candidate_clusters(
+            (first, second, singleton),
+            FrozenEmbeddingAdapter(
+                ((1.0, 0.0), (0.8, 0.6), (-1.0, 0.0))
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            published = publish_run(
+                publication_input(
+                    Path(temporary_directory) / "runs",
+                    attention=WikimediaAttentionResult((), (first, second, singleton), ()),
+                    qualification=qualification,
+                    classification=classification,
+                    clustering=clustering,
+                )
+            )
+            audit = json.loads((published / "audit.json").read_text())
+            evidence = json.loads(
+                (published / "clustering" / "candidate_clusters.json").read_text()
+            )
+            portfolio = json.loads((published / "portfolio.json").read_text())
+            report = (published / "report.html").read_text()
+
+        self.assertEqual(audit["candidate_clustering"], evidence)
+        self.assertEqual(evidence["model"], "sentence-transformers/all-mpnet-base-v2")
+        self.assertEqual(evidence["threshold"], 0.62)
+        self.assertEqual(evidence["components"][0]["page_ids"], [42, 43])
+        self.assertTrue(evidence["components"][0]["is_candidate_cluster"])
+        self.assertFalse(evidence["components"][1]["is_candidate_cluster"])
+        self.assertEqual(portfolio["audiences"], [])
+        self.assertIn("Candidate clusters", report)
+        self.assertIn("not accepted audiences", report)
 
     def test_schema_validation_failure_creates_no_output_root(self) -> None:
         invalid_attention = WikimediaAttentionResult(

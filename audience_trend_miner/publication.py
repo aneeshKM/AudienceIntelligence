@@ -11,6 +11,7 @@ from urllib.parse import quote
 import jsonschema
 
 from audience_trend_miner.classification import ArticleClassification, ArticleClassificationResult
+from audience_trend_miner.clustering import CandidateClusteringResult
 from audience_trend_miner.trends import TrendDecision, TrendQualificationResult
 from audience_trend_miner.wikimedia import AnalysisWindows, WikimediaAttentionResult
 
@@ -28,6 +29,7 @@ class PublicationInput:
     attention: WikimediaAttentionResult
     qualification: TrendQualificationResult
     classification: ArticleClassificationResult
+    clustering: CandidateClusteringResult
     configuration: dict[str, str]
     run_id: str | None
 
@@ -118,6 +120,9 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
             _classification_audit_record(decision)
             for decision in publication.classification.decisions
         ],
+        "candidate_clustering": json.loads(
+            json.dumps(asdict(publication.clustering))
+        ),
         "failures": [],
     }
     audit.update(_attention_audit_data(publication.attention))
@@ -131,6 +136,9 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         "report.html": _report(publication),
         "wikimedia/canonical_articles.json": _json_text(
             audit["canonical_articles"]
+        ),
+        "clustering/candidate_clusters.json": _json_text(
+            audit["candidate_clustering"]
         ),
     }
     if publication.classification.decisions:
@@ -302,6 +310,23 @@ def _report(publication: PublicationInput) -> str:
         f"{escape(decision.decision_reason)}</li>"
         for decision in publication.classification.rejected
     ) or "<li>No article classifications were rejected.</li>"
+    titles_by_page_id = {
+        article.page_id: article.canonical_title
+        for article in publication.attention.canonical_articles
+    }
+    candidate_clusters = "".join(
+        "<li>" + ", ".join(
+            f"<strong>{escape(titles_by_page_id[page_id])}</strong>"
+            for page_id in component.page_ids
+        ) + "</li>"
+        for component in publication.clustering.components
+        if component.is_candidate_cluster
+    ) or "<li>No multi-signal candidate clusters formed.</li>"
+    singleton_signals = "".join(
+        f"<li><strong>{escape(titles_by_page_id[component.page_ids[0]])}</strong></li>"
+        for component in publication.clustering.components
+        if not component.is_candidate_cluster
+    ) or "<li>No singleton signals remained.</li>"
     noise_items = "".join(
         f"<li><strong>{escape(decision.article.canonical_title)}</strong> — "
         f"{escape(decision.exclusion_reason or '')}</li>"
@@ -323,7 +348,11 @@ def _report(publication: PublicationInput) -> str:
 <body><main>
   <p>Audience Trend Miner</p>
   <h1>Emerging Audience Portfolio</h1>
-  <p class="notice">These are qualified attention signals, not yet accepted audiences.</p>
+  <p class="notice">Candidate clusters are initial components, not accepted audiences; qualified signals are not yet accepted audiences.</p>
+  <h2>Candidate clusters</h2>
+  <ul>{candidate_clusters}</ul>
+  <h2>Standalone singleton signals</h2>
+  <ul>{singleton_signals}</ul>
   <h2>Qualified attention signals</h2>
   <ul>{qualified_items}</ul>
   <h2>Rejected deterministic noise</h2>

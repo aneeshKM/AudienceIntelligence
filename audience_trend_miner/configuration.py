@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit
 
+from audience_trend_miner.clustering import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_SIMILARITY_THRESHOLD,
+)
+
 
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 DEFAULT_DATABASE_URL = "postgresql://localhost/audience_intelligence"
@@ -23,6 +28,9 @@ class EffectiveRunConfiguration:
     classification_fixture: Path | None
     wikimedia_fixture: Path | None
     wikimedia_base_url: str | None
+    embedding_model: str
+    similarity_threshold: float
+    embedding_fixture: Path | None
 
     def safe_provenance(self) -> dict[str, str]:
         return {
@@ -38,6 +46,9 @@ class EffectiveRunConfiguration:
                 else "live"
             ),
             "database_host": urlsplit(self.database_url).hostname or "local",
+            "embedding_model": self.embedding_model,
+            "similarity_threshold": str(self.similarity_threshold),
+            "embedding_mode": "fixture" if self.embedding_fixture else "local",
         }
 
 
@@ -54,7 +65,8 @@ def load_run_configuration(
 
     classification_fixture = value("AUDIENCE_TREND_MINER_CLASSIFICATION_FIXTURE")
     wikimedia_fixture = value("AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE")
-    if (classification_fixture or wikimedia_fixture) and value(
+    embedding_fixture = value("AUDIENCE_TREND_MINER_EMBEDDING_FIXTURE")
+    if (classification_fixture or wikimedia_fixture or embedding_fixture) and value(
         "AUDIENCE_TREND_MINER_TEST_MODE"
     ) != "1":
         raise ConfigurationError(
@@ -73,6 +85,17 @@ def load_run_configuration(
         base_url = dotenv["AUDIENCE_TREND_MINER_WIKIMEDIA_BASE_URL"]
     else:
         base_url = None
+    try:
+        similarity_threshold = float(
+            value(
+                "AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD",
+                str(DEFAULT_SIMILARITY_THRESHOLD),
+            )
+        )
+    except ValueError as error:
+        raise ConfigurationError("similarity threshold must be a number") from error
+    if not -1.0 <= similarity_threshold <= 1.0:
+        raise ConfigurationError("similarity threshold must be between -1 and 1")
     return EffectiveRunConfiguration(
         groq_api_key=api_key,
         model=value("AUDIENCE_TREND_MINER_MODEL", DEFAULT_MODEL),
@@ -82,6 +105,11 @@ def load_run_configuration(
         else None,
         wikimedia_fixture=Path(wikimedia_fixture) if wikimedia_fixture else None,
         wikimedia_base_url=base_url,
+        embedding_model=value(
+            "AUDIENCE_TREND_MINER_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL
+        ),
+        similarity_threshold=similarity_threshold,
+        embedding_fixture=Path(embedding_fixture) if embedding_fixture else None,
     )
 
 

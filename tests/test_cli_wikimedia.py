@@ -40,6 +40,17 @@ def classification_fixture(*responses: object) -> dict[str, object]:
     return {"responses": list(responses)}
 
 
+def write_embedding_fixture(path: Path, embeddings: list[list[float]]) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "model": "sentence-transformers/all-mpnet-base-v2",
+                "embeddings": embeddings,
+            }
+        )
+    )
+
+
 class CliWikimediaTest(unittest.TestCase):
     def test_cli_fixtures_cover_all_rejections_retry_recovery_and_exhaustion(self) -> None:
         rejection_classes = (
@@ -106,6 +117,8 @@ class CliWikimediaTest(unittest.TestCase):
             wikimedia_path.write_text(json.dumps(payload))
             classification_path = temporary_path / "classification.json"
             classification_path.write_text(json.dumps({"responses": responses}))
+            embedding_path = temporary_path / "embeddings.json"
+            write_embedding_fixture(embedding_path, [[1.0, 0.0]])
             output_directory = temporary_path / "runs"
             environment = os.environ.copy()
             environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
@@ -115,6 +128,9 @@ class CliWikimediaTest(unittest.TestCase):
             )
             environment["AUDIENCE_TREND_MINER_CLASSIFICATION_FIXTURE"] = str(
                 classification_path
+            )
+            environment["AUDIENCE_TREND_MINER_EMBEDDING_FIXTURE"] = str(
+                embedding_path
             )
             completed = subprocess.run(
                 [
@@ -173,6 +189,8 @@ class CliWikimediaTest(unittest.TestCase):
                     )
                 )
             )
+            embedding_path = temporary_path / "embeddings.json"
+            write_embedding_fixture(embedding_path, [[1.0, 0.0]])
             output_directory = temporary_path / "runs"
             environment = os.environ.copy()
             environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
@@ -182,6 +200,9 @@ class CliWikimediaTest(unittest.TestCase):
             )
             environment["AUDIENCE_TREND_MINER_CLASSIFICATION_FIXTURE"] = str(
                 classification_path
+            )
+            environment["AUDIENCE_TREND_MINER_EMBEDDING_FIXTURE"] = str(
+                embedding_path
             )
 
             completed = subprocess.run(
@@ -204,10 +225,15 @@ class CliWikimediaTest(unittest.TestCase):
             evidence_exists = (
                 run_directory / "classification" / "article_judgments.json"
             ).is_file()
+            clustering = json.loads(
+                (run_directory / "clustering" / "candidate_clusters.json").read_text()
+            )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(audit["qualified_signals"][0]["canonical_title"], "Canonical A")
         self.assertTrue(evidence_exists)
+        self.assertEqual(clustering["components"][0]["page_ids"], [42])
+        self.assertFalse(clustering["components"][0]["is_candidate_cluster"])
 
     def test_cli_acquires_attention_from_explicit_fixture_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

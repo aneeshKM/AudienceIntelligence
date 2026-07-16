@@ -48,6 +48,8 @@ timestamped directory containing:
 - `classification/article_judgments.json` — prompts, raw model outputs,
   validation results, decisions, and complete attempt histories (when articles
   reach classification)
+- `clustering/candidate_clusters.json` — semantic representations, embeddings,
+  pairwise cosine values, graph edges, and connected-component membership
 
 Run Publication is atomic: artifacts are assembled and validated before being
 staged, and the timestamped directory appears only after every file is complete.
@@ -78,6 +80,13 @@ runs. The default model is `openai/gpt-oss-120b`; override it with
 `responses` array. Invalid output and request failures are retried three total
 times with exponential backoff and jitter, then rejected with their evidence
 preserved in the audit.
+
+Surviving classified signals are embedded locally exactly once using
+`sentence-transformers/all-mpnet-base-v2`. Override the model with
+`AUDIENCE_TREND_MINER_EMBEDDING_MODEL` or the inclusive graph-edge threshold
+with `AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD` (default `0.62`). Connected
+components are candidate clusters only; singleton components remain auditable
+standalone signals and neither kind is published as an accepted audience.
 
 For local development, copy `.env.example` to `.env` and set both values there:
 

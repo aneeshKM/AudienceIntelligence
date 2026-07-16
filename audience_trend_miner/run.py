@@ -11,7 +11,17 @@ from audience_trend_miner.classification import (
     StructuredGenerator,
     classify_articles,
 )
-from audience_trend_miner.configuration import EffectiveRunConfiguration, load_run_configuration
+from audience_trend_miner.clustering import (
+    CandidateClusteringResult,
+    EmbeddingAdapter,
+    FrozenEmbeddingAdapter,
+    SentenceTransformerEmbeddingAdapter,
+    form_candidate_clusters,
+)
+from audience_trend_miner.configuration import (
+    EffectiveRunConfiguration,
+    load_run_configuration,
+)
 from audience_trend_miner.publication import PublicationInput, publish_run
 from audience_trend_miner.evidence_jobs import EvidenceJobStore
 from audience_trend_miner.resumable_wikimedia import acquire_resumable_wikimedia_attention
@@ -80,6 +90,22 @@ def execute_run(
             if isinstance(generator, FixtureStructuredGenerator)
             else time.sleep,
         )
+    clustering = CandidateClusteringResult(
+        configuration.embedding_model,
+        configuration.similarity_threshold,
+        (), (), (), (),
+    )
+    if classification.accepted:
+        accepted_page_ids = {item.page_id for item in classification.accepted}
+        clustering = form_candidate_clusters(
+            tuple(
+                item.article
+                for item in qualification.qualified
+                if item.article.page_id in accepted_page_ids
+            ),
+            _selected_embedding_adapter(configuration),
+            threshold=configuration.similarity_threshold,
+        )
 
     publication_path = str((output_directory / effective_run_id).resolve())
     job_store.reserve_publication_path(effective_run_id, publication_path)
@@ -93,6 +119,7 @@ def execute_run(
             attention=attention,
             qualification=qualification,
             classification=classification,
+            clustering=clustering,
             configuration=configuration.safe_provenance(),
             run_id=effective_run_id,
         )
@@ -124,3 +151,11 @@ def _selected_structured_generator(
         api_key=configuration.groq_api_key,
         model=configuration.model,
     )
+
+
+def _selected_embedding_adapter(
+    configuration: EffectiveRunConfiguration,
+) -> EmbeddingAdapter:
+    if configuration.embedding_fixture:
+        return FrozenEmbeddingAdapter.from_file(configuration.embedding_fixture)
+    return SentenceTransformerEmbeddingAdapter(configuration.embedding_model)

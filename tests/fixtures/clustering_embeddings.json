@@ -1,0 +1,7 @@
+{
+  "model": "sentence-transformers/all-mpnet-base-v2",
+  "embeddings": [
+    [1.0, 0.0],
+    [1.0, 0.0]
+  ]
+}
