@@ -63,3 +63,11 @@ An unmistakable technical or navigational Wikipedia target: Main Page or a page 
 ## Run Publication
 
 The atomic operation that accepts finished domain results and effective run facts, assembles and validates the complete artifact bundle, renders the report, stages all files, and exposes the timestamped run directory only after every artifact is complete. Domain degradation is publishable; publication failure leaves no completed run directory.
+
+## Accepted Refined Audience
+
+A group of at least two distinct Canonical Articles retained from a candidate
+component by a schema-valid validate or split decision and then cleared by a
+separate cluster-level tragedy and violent-crime safety assessment. Canonical
+Article traffic belongs to at most one Accepted Refined Audience; alternative
+matches are audit evidence only.

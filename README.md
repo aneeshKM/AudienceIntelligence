@@ -50,6 +50,9 @@ timestamped directory containing:
   reach classification)
 - `clustering/candidate_clusters.json` — semantic representations, embeddings,
   pairwise cosine values, graph edges, and connected-component membership
+- `clustering/refinement.json` — validate/split/reject decisions, exclusive
+  accepted membership, alternatives, rejected singletons, retry attempts, and
+  independent cluster-level safety vetoes
 
 Run Publication is atomic: artifacts are assembled and validated before being
 staged, and the timestamped directory appears only after every file is complete.
@@ -85,8 +88,11 @@ Surviving classified signals are embedded locally exactly once using
 `sentence-transformers/all-mpnet-base-v2`. Override the model with
 `AUDIENCE_TREND_MINER_EMBEDDING_MODEL` or the inclusive graph-edge threshold
 with `AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD` (default `0.62`). Connected
-components are candidate clusters only; singleton components remain auditable
-standalone signals and neither kind is published as an accepted audience.
+components are candidate clusters only. Multi-article components receive a
+schema-valid validate, split, or reject decision followed by a separate safety
+veto; singleton components remain auditable standalone signals. Refined
+audiences remain outside `portfolio.json` until the later scoring and portfolio
+assembly stages.
 
 For local development, copy `.env.example` to `.env` and set both values there:
 

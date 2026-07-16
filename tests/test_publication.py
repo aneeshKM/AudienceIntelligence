@@ -19,6 +19,7 @@ from audience_trend_miner.clustering import (
     FrozenEmbeddingAdapter,
     form_candidate_clusters,
 )
+from audience_trend_miner.refinement import ClusterRefinementResult, refine_candidate_clusters
 from tests.test_article_classification import ScriptedGenerator, judgment
 from audience_trend_miner.trends import TrendQualificationResult, qualify_trends
 from audience_trend_miner.wikimedia import (
@@ -41,6 +42,7 @@ def publication_input(
     clustering: CandidateClusteringResult = CandidateClusteringResult(
         "sentence-transformers/all-mpnet-base-v2", 0.62, (), (), (), ()
     ),
+    refinement: ClusterRefinementResult = ClusterRefinementResult((), (), ()),
 ) -> PublicationInput:
     return PublicationInput(
         output_root=output_root,
@@ -57,6 +59,7 @@ def publication_input(
         qualification=qualification,
         classification=classification,
         clustering=clustering,
+        refinement=refinement,
         configuration={
             "model": "fixture/model",
             "classification_mode": "fixture",
@@ -68,6 +71,30 @@ def publication_input(
         },
         run_id=None,
     )
+
+
+def refinement_audience(name: str, *page_ids: int) -> dict[str, object]:
+    return {
+        "name": name,
+        "page_ids": list(page_ids),
+        "rationale": "Distinct articles describe one targetable audience.",
+    }
+
+
+def refinement_decision(
+    action: str,
+    audiences: list[dict[str, object]],
+    rejected_page_ids: list[int],
+    *,
+    alternative_matches: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "action": action,
+        "audiences": audiences,
+        "rejected_page_ids": rejected_page_ids,
+        "alternative_matches": alternative_matches,
+        "rationale": "Fixture refinement decision.",
+    }
 
 
 class RunPublicationTest(unittest.TestCase):
@@ -308,6 +335,109 @@ class RunPublicationTest(unittest.TestCase):
         self.assertEqual(portfolio["audiences"], [])
         self.assertIn("Candidate clusters", report)
         self.assertIn("not accepted audiences", report)
+
+    def test_publishes_refined_membership_alternatives_singletons_and_safety_evidence(self) -> None:
+        first = _qualified_article(42, "Running shoes")
+        second = _qualified_article(43, "Marathon training")
+        alternative = _qualified_article(44, "Sports event")
+        singleton = _qualified_article(45, "Home espresso")
+        articles = (first, second, alternative, singleton)
+        qualification = qualify_trends(articles)
+        classification = classify_articles(
+            articles,
+            ScriptedGenerator(*(judgment() for _ in articles)),
+            sleep=lambda _: None,
+        )
+        clustering = form_candidate_clusters(
+            articles,
+            FrozenEmbeddingAdapter(
+                ((1.0, 0.0), (0.9, 0.1), (0.8, 0.2), (-1.0, 0.0))
+            ),
+        )
+        refined = refine_candidate_clusters(
+            clustering.components,
+            articles,
+            ScriptedGenerator(
+                refinement_decision(
+                    "split",
+                    [refinement_audience("Endurance Runners", 42, 43)],
+                    [44],
+                    alternative_matches=[{
+                        "page_id": 44,
+                        "audience_name": "Endurance Runners",
+                        "rationale": "Adjacent signal retained for review only.",
+                    }],
+                ),
+                {
+                    "materially_centered_on_tragedy": False,
+                    "materially_centered_on_violent_crime": False,
+                    "rationale": "Fixture cluster-level safety assessment.",
+                },
+            ),
+            sleep=lambda _: None,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            published = publish_run(
+                publication_input(
+                    Path(temporary_directory) / "runs",
+                    attention=WikimediaAttentionResult((), articles, ()),
+                    qualification=qualification,
+                    classification=classification,
+                    clustering=clustering,
+                    refinement=refined,
+                )
+            )
+            audit = json.loads((published / "audit.json").read_text())
+            evidence = json.loads(
+                (published / "clustering" / "refinement.json").read_text()
+            )
+
+        self.assertEqual(audit["cluster_refinement"], evidence)
+        self.assertEqual(evidence["accepted"][0]["page_ids"], [42, 43])
+        self.assertEqual(evidence["decisions"][0]["rejected_page_ids"], [44])
+        self.assertEqual(evidence["decisions"][0]["alternative_matches"][0]["page_id"], 44)
+        self.assertEqual(evidence["rejected_standalone_page_ids"], [45])
+        self.assertTrue(evidence["accepted"][0]["safety"]["safe"])
+
+    def test_refinement_exhaustion_degrades_run_and_enters_failure_ledger(self) -> None:
+        articles = (
+            _qualified_article(42, "Running shoes"),
+            _qualified_article(43, "Marathon training"),
+        )
+        qualification = qualify_trends(articles)
+        classification = classify_articles(
+            articles,
+            ScriptedGenerator(judgment(), judgment()),
+            sleep=lambda _: None,
+        )
+        clustering = form_candidate_clusters(
+            articles, FrozenEmbeddingAdapter(((1.0, 0.0), (1.0, 0.0)))
+        )
+        refined = refine_candidate_clusters(
+            clustering.components,
+            articles,
+            ScriptedGenerator({"invalid": True}, {"invalid": True}, {"invalid": True}),
+            sleep=lambda _: None,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            published = publish_run(
+                publication_input(
+                    Path(temporary_directory) / "runs",
+                    attention=WikimediaAttentionResult((), articles, ()),
+                    qualification=qualification,
+                    classification=classification,
+                    clustering=clustering,
+                    refinement=refined,
+                )
+            )
+            audit = json.loads((published / "audit.json").read_text())
+
+        self.assertTrue(audit["degraded"])
+        self.assertEqual(audit["failures"][0]["operation"], "cluster_refinement")
+        self.assertEqual(audit["failures"][0]["attempts"], 3)
+        self.assertIn("ValidationError", audit["failures"][0]["reason"])
 
     def test_schema_validation_failure_creates_no_output_root(self) -> None:
         invalid_attention = WikimediaAttentionResult(

@@ -23,6 +23,10 @@ from audience_trend_miner.configuration import (
     load_run_configuration,
 )
 from audience_trend_miner.publication import PublicationInput, publish_run
+from audience_trend_miner.refinement import (
+    ClusterRefinementResult,
+    refine_candidate_clusters,
+)
 from audience_trend_miner.evidence_jobs import EvidenceJobStore
 from audience_trend_miner.resumable_wikimedia import acquire_resumable_wikimedia_attention
 from audience_trend_miner.trends import qualify_trends
@@ -81,6 +85,7 @@ def execute_run(
         )
     qualification = qualify_trends(attention.canonical_articles)
     classification = ArticleClassificationResult((), (), ())
+    generator: StructuredGenerator | None = None
     if qualification.qualified:
         generator = _selected_structured_generator(configuration)
         classification = classify_articles(
@@ -106,6 +111,32 @@ def execute_run(
             _selected_embedding_adapter(configuration),
             threshold=configuration.similarity_threshold,
         )
+    refinement = ClusterRefinementResult((), (), ())
+    if any(component.is_candidate_cluster for component in clustering.components):
+        assert generator is not None
+        refinement = refine_candidate_clusters(
+            clustering.components,
+            tuple(
+                item.article
+                for item in qualification.qualified
+                if item.article.page_id
+                in {decision.page_id for decision in classification.accepted}
+            ),
+            generator,
+            sleep=(lambda _: None)
+            if isinstance(generator, FixtureStructuredGenerator)
+            else time.sleep,
+        )
+    else:
+        refinement = ClusterRefinementResult(
+            (),
+            (),
+            tuple(
+                component.page_ids[0]
+                for component in clustering.components
+                if not component.is_candidate_cluster
+            ),
+        )
 
     publication_path = str((output_directory / effective_run_id).resolve())
     job_store.reserve_publication_path(effective_run_id, publication_path)
@@ -120,6 +151,7 @@ def execute_run(
             qualification=qualification,
             classification=classification,
             clustering=clustering,
+            refinement=refinement,
             configuration=configuration.safe_provenance(),
             run_id=effective_run_id,
         )

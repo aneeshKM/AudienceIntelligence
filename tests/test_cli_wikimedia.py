@@ -52,6 +52,160 @@ def write_embedding_fixture(path: Path, embeddings: list[list[float]]) -> None:
 
 
 class CliWikimediaTest(unittest.TestCase):
+    def test_cli_refines_every_component_with_exclusive_membership_and_safety_veto(self) -> None:
+        aliases = [f"Alias_{page_id}" for page_id in range(1, 11)]
+        payload = {
+            "discovery": {
+                (date(2026, 7, 8) + timedelta(days=offset)).isoformat(): aliases
+                for offset in range(7)
+            },
+            "pageviews": {
+                alias: [
+                    {
+                        "date": (date(2026, 7, 1) + timedelta(days=offset)).isoformat(),
+                        "views": 10_000 if offset < 7 else 20_000,
+                    }
+                    for offset in range(14)
+                ]
+                for alias in aliases
+            },
+            "metadata": {
+                alias: {
+                    "page_id": page_id,
+                    "canonical_title": f"Article {page_id}",
+                    "extract": "Fixture lead.",
+                    "categories": ["Fixture"],
+                }
+                for page_id, alias in enumerate(aliases, start=1)
+            },
+        }
+        accepted_judgment = {
+            "supports_consumer_audience": True,
+            "brand_safe": True,
+            "rejection_class": "accepted",
+            "rationale": "Commercial fixture.",
+        }
+        responses: list[object] = [accepted_judgment for _ in aliases]
+        responses.extend(
+            [
+                {
+                    "action": "validate",
+                    "audiences": [{
+                        "name": "Validated Audience",
+                        "page_ids": [1, 2],
+                        "rationale": "One coherent audience.",
+                    }],
+                    "rejected_page_ids": [],
+                    "alternative_matches": [],
+                    "rationale": "Validated fixture component.",
+                },
+                {
+                    "materially_centered_on_tragedy": False,
+                    "materially_centered_on_violent_crime": False,
+                    "rationale": "Safe fixture audience.",
+                },
+                {
+                    "action": "split",
+                    "audiences": [{
+                        "name": "Split Audience",
+                        "page_ids": [3, 4],
+                        "rationale": "Coherent subset after removing a chained signal.",
+                    }],
+                    "rejected_page_ids": [5],
+                    "alternative_matches": [{
+                        "page_id": 5,
+                        "audience_name": "Split Audience",
+                        "rationale": "Review-only adjacent match.",
+                    }],
+                    "rationale": "Split fixture component.",
+                },
+                {
+                    "materially_centered_on_tragedy": False,
+                    "materially_centered_on_violent_crime": False,
+                    "rationale": "Safe fixture audience.",
+                },
+                {
+                    "action": "reject",
+                    "audiences": [],
+                    "rejected_page_ids": [6, 7],
+                    "alternative_matches": [],
+                    "rationale": "No coherent audience.",
+                },
+                {
+                    "action": "validate",
+                    "audiences": [{
+                        "name": "Unsafe Audience",
+                        "page_ids": [8, 9],
+                        "rationale": "Semantically coherent but unsafe.",
+                    }],
+                    "rejected_page_ids": [],
+                    "alternative_matches": [],
+                    "rationale": "Validated before the independent veto.",
+                },
+                {
+                    "materially_centered_on_tragedy": False,
+                    "materially_centered_on_violent_crime": True,
+                    "rationale": "Materially centered on violent crime.",
+                },
+            ]
+        )
+        embeddings = (
+            [[1.0, 0.0, 0.0, 0.0]] * 2
+            + [[0.0, 1.0, 0.0, 0.0]] * 3
+            + [[0.0, 0.0, 1.0, 0.0]] * 2
+            + [[0.0, 0.0, 0.0, 1.0]] * 2
+            + [[-1.0, 0.0, 0.0, 0.0]]
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            wikimedia_path = temporary_path / "wikimedia.json"
+            wikimedia_path.write_text(json.dumps(payload))
+            classification_path = temporary_path / "classification.json"
+            classification_path.write_text(json.dumps({"responses": responses}))
+            embedding_path = temporary_path / "embeddings.json"
+            write_embedding_fixture(embedding_path, embeddings)
+            output_directory = temporary_path / "runs"
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "DATABASE_URL": "postgresql://postgres:test@localhost:55432/audience_intelligence_test",
+                    "AUDIENCE_TREND_MINER_TEST_MODE": "1",
+                    "AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE": str(wikimedia_path),
+                    "AUDIENCE_TREND_MINER_CLASSIFICATION_FIXTURE": str(classification_path),
+                    "AUDIENCE_TREND_MINER_EMBEDDING_FIXTURE": str(embedding_path),
+                }
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable, "-m", "audience_trend_miner", "--as-of",
+                    "2026-07-16", "--output-dir", str(output_directory),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            run_directory = next(output_directory.iterdir())
+            refinement = json.loads(
+                (run_directory / "clustering" / "refinement.json").read_text()
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            [decision["action"] for decision in refinement["decisions"]],
+            ["validate", "split", "reject", "validate"],
+        )
+        self.assertEqual(refinement["decisions"][3]["outcome"], "safety_vetoed")
+        accepted_members = [
+            page_id
+            for audience in refinement["accepted"]
+            for page_id in audience["page_ids"]
+        ]
+        self.assertEqual(accepted_members, [1, 2, 3, 4])
+        self.assertEqual(len(accepted_members), len(set(accepted_members)))
+        self.assertEqual(refinement["rejected_standalone_page_ids"], [10])
+
     def test_cli_fixtures_cover_all_rejections_retry_recovery_and_exhaustion(self) -> None:
         rejection_classes = (
             "tragedy",

@@ -118,7 +118,7 @@ class EvidenceJobStore:
         self, run_id: str, operation: str, subjects: tuple[str, ...]
     ) -> None:
         with psycopg.connect(self.database_url) as connection:
-            connection.executemany(
+            connection.cursor().executemany(
                 """INSERT INTO evidence_jobs (run_id, operation, subject)
                    VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
                 ((run_id, operation, subject) for subject in subjects),

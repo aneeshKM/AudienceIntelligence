@@ -4,7 +4,7 @@
   "title": "Audience Trend Miner Audit",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "status", "degraded", "run", "decisions", "qualified_signals", "article_classifications", "candidate_clustering", "failures"],
+  "required": ["schema_version", "status", "degraded", "run", "decisions", "qualified_signals", "article_classifications", "candidate_clustering", "cluster_refinement", "failures"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "status": {"enum": ["success", "failed"]},
@@ -23,6 +23,7 @@
       "items": {"$ref": "#/$defs/articleClassification"}
     },
     "candidate_clustering": {"$ref": "#/$defs/candidateClustering"},
+    "cluster_refinement": {"$ref": "#/$defs/clusterRefinement"},
     "failures": {
       "type": "array",
       "items": {"$ref": "#/$defs/failure"}
@@ -80,6 +81,93 @@
         "similarities": {"type": "array", "items": {"$ref": "#/$defs/similarity"}},
         "edges": {"type": "array", "items": {"$ref": "#/$defs/similarity"}},
         "components": {"type": "array", "items": {"$ref": "#/$defs/candidateComponent"}}
+      }
+    },
+    "refinementAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt", "raw_output", "validation_valid", "error"],
+      "properties": {
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 3},
+        "raw_output": {},
+        "validation_valid": {"type": "boolean"},
+        "error": {"type": ["string", "null"]}
+      }
+    },
+    "proposedAudience": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "page_ids", "rationale"],
+      "properties": {
+        "name": {"type": "string", "minLength": 3},
+        "page_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "refinementAlternative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page_id", "audience_name", "rationale"],
+      "properties": {
+        "page_id": {"type": "integer", "minimum": 1},
+        "audience_name": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "clusterSafety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audience_name", "page_ids", "prompt", "safe", "decision_reason", "materially_centered_on_tragedy", "materially_centered_on_violent_crime", "rationale", "attempts"],
+      "properties": {
+        "audience_name": {"type": "string", "minLength": 1},
+        "page_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "prompt": {"type": "string", "minLength": 1},
+        "safe": {"type": "boolean"},
+        "decision_reason": {"enum": ["accepted", "safety_vetoed", "exhausted_attempts"]},
+        "materially_centered_on_tragedy": {"type": ["boolean", "null"]},
+        "materially_centered_on_violent_crime": {"type": ["boolean", "null"]},
+        "rationale": {"type": ["string", "null"]},
+        "attempts": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"$ref": "#/$defs/refinementAttempt"}}
+      }
+    },
+    "acceptedAudience": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "page_ids", "rationale", "source_component_id", "safety"],
+      "properties": {
+        "name": {"type": "string", "minLength": 3},
+        "page_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "rationale": {"type": "string", "minLength": 1},
+        "source_component_id": {"type": "integer", "minimum": 1},
+        "safety": {"$ref": "#/$defs/clusterSafety"}
+      }
+    },
+    "clusterRefinementDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component_id", "candidate_page_ids", "prompt", "action", "outcome", "rationale", "proposed_audiences", "rejected_page_ids", "alternative_matches", "attempts", "safety_assessments"],
+      "properties": {
+        "component_id": {"type": "integer", "minimum": 1},
+        "candidate_page_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "prompt": {"type": "string", "minLength": 1},
+        "action": {"enum": ["validate", "split", "reject"]},
+        "outcome": {"enum": ["accepted", "rejected", "safety_vetoed", "partially_accepted", "exhausted_attempts"]},
+        "rationale": {"type": ["string", "null"]},
+        "proposed_audiences": {"type": "array", "items": {"$ref": "#/$defs/proposedAudience"}},
+        "rejected_page_ids": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "alternative_matches": {"type": "array", "items": {"$ref": "#/$defs/refinementAlternative"}},
+        "attempts": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"$ref": "#/$defs/refinementAttempt"}},
+        "safety_assessments": {"type": "array", "items": {"$ref": "#/$defs/clusterSafety"}}
+      }
+    },
+    "clusterRefinement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accepted", "decisions", "rejected_standalone_page_ids"],
+      "properties": {
+        "accepted": {"type": "array", "items": {"$ref": "#/$defs/acceptedAudience"}},
+        "decisions": {"type": "array", "items": {"$ref": "#/$defs/clusterRefinementDecision"}},
+        "rejected_standalone_page_ids": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}}
       }
     },
     "qualificationGates": {
@@ -268,7 +356,7 @@
       "required": ["operation", "subject", "attempts", "reason"],
       "properties": {
         "operation": {
-          "enum": ["discovery", "pageviews", "metadata", "canonicalization"]
+          "enum": ["discovery", "pageviews", "metadata", "canonicalization", "cluster_refinement", "cluster_safety"]
         },
         "subject": {"type": "string", "minLength": 1},
         "attempts": {"type": "integer", "minimum": 1, "maximum": 3},

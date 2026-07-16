@@ -12,6 +12,7 @@ import jsonschema
 
 from audience_trend_miner.classification import ArticleClassification, ArticleClassificationResult
 from audience_trend_miner.clustering import CandidateClusteringResult
+from audience_trend_miner.refinement import ClusterRefinementResult
 from audience_trend_miner.trends import TrendDecision, TrendQualificationResult
 from audience_trend_miner.wikimedia import AnalysisWindows, WikimediaAttentionResult
 
@@ -30,6 +31,7 @@ class PublicationInput:
     qualification: TrendQualificationResult
     classification: ArticleClassificationResult
     clustering: CandidateClusteringResult
+    refinement: ClusterRefinementResult
     configuration: dict[str, str]
     run_id: str | None
 
@@ -123,9 +125,14 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         "candidate_clustering": json.loads(
             json.dumps(asdict(publication.clustering))
         ),
+        "cluster_refinement": json.loads(json.dumps(asdict(publication.refinement))),
         "failures": [],
     }
     audit.update(_attention_audit_data(publication.attention))
+    audit["failures"].extend(_refinement_failure_records(publication.refinement))
+    audit["degraded"] = bool(audit["degraded"]) or _refinement_degraded(
+        publication.refinement
+    )
     _validate("portfolio.schema.json", portfolio)
     _validate("audit.schema.json", audit)
 
@@ -140,6 +147,7 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         "clustering/candidate_clusters.json": _json_text(
             audit["candidate_clustering"]
         ),
+        "clustering/refinement.json": _json_text(audit["cluster_refinement"]),
     }
     if publication.classification.decisions:
         artifacts["classification/article_judgments.json"] = _json_text(
@@ -207,6 +215,50 @@ def _accepted_signal_records(publication: PublicationInput) -> list[dict[str, ob
         for decision in publication.qualification.qualified
         if decision.article.page_id in accepted_page_ids
     ]
+
+
+def _refinement_degraded(refinement: ClusterRefinementResult) -> bool:
+    return any(
+        decision.outcome == "exhausted_attempts"
+        or any(
+            assessment.decision_reason == "exhausted_attempts"
+            for assessment in decision.safety_assessments
+        )
+        for decision in refinement.decisions
+    )
+
+
+def _refinement_failure_records(
+    refinement: ClusterRefinementResult,
+) -> list[dict[str, object]]:
+    failures: list[dict[str, object]] = []
+    for decision in refinement.decisions:
+        if decision.outcome == "exhausted_attempts":
+            failures.append(
+                {
+                    "operation": "cluster_refinement",
+                    "subject": f"component:{decision.component_id}",
+                    "attempts": len(decision.attempts),
+                    "reason": decision.attempts[-1].error or "structured generation failed",
+                }
+            )
+        for assessment in decision.safety_assessments:
+            if assessment.decision_reason == "exhausted_attempts":
+                failures.append(
+                    {
+                        "operation": "cluster_safety",
+                        "subject": (
+                            f"component:{decision.component_id}:"
+                            f"audience:{assessment.audience_name}"
+                        ),
+                        "attempts": len(assessment.attempts),
+                        "reason": (
+                            assessment.attempts[-1].error
+                            or "structured generation failed"
+                        ),
+                    }
+                )
+    return failures
 
 
 def _raw_artifact_path(operation: str, subject: str) -> str:
@@ -322,6 +374,14 @@ def _report(publication: PublicationInput) -> str:
         for component in publication.clustering.components
         if component.is_candidate_cluster
     ) or "<li>No multi-signal candidate clusters formed.</li>"
+    accepted_audiences = "".join(
+        f"<li><strong>{escape(audience.name)}</strong> — "
+        + ", ".join(
+            escape(titles_by_page_id[page_id]) for page_id in audience.page_ids
+        )
+        + "</li>"
+        for audience in publication.refinement.accepted
+    ) or "<li>No candidate clusters passed refinement and safety review.</li>"
     singleton_signals = "".join(
         f"<li><strong>{escape(titles_by_page_id[component.page_ids[0]])}</strong></li>"
         for component in publication.clustering.components
@@ -348,9 +408,11 @@ def _report(publication: PublicationInput) -> str:
 <body><main>
   <p>Audience Trend Miner</p>
   <h1>Emerging Audience Portfolio</h1>
-  <p class="notice">Candidate clusters are initial components, not accepted audiences; qualified signals are not yet accepted audiences.</p>
+  <p class="notice">Qualified signals are not yet accepted audiences; candidate clusters are not accepted audiences until they pass semantic refinement and a separate cluster-level safety veto.</p>
   <h2>Candidate clusters</h2>
   <ul>{candidate_clusters}</ul>
+  <h2>Accepted refined audiences</h2>
+  <ul>{accepted_audiences}</ul>
   <h2>Standalone singleton signals</h2>
   <ul>{singleton_signals}</ul>
   <h2>Qualified attention signals</h2>
