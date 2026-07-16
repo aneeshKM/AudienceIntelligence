@@ -22,17 +22,19 @@ Split the internal Wikimedia pipeline into two deep modules with distinct
 interfaces:
 
 1. **Wikimedia Evidence Fetching** completes discovery and retrieves raw
-   Pageviews and metadata evidence.
-2. **Wikimedia Attention Transformation** consumes persisted evidence, derives
-   Alias Traffic, and forms Canonical Articles deterministically.
+   Pageviews and metadata evidence, returning an immutable typed terminal
+   evidence set only after all required fetching work is terminal.
+2. **Wikimedia Attention Transformation** synchronously consumes that terminal
+   evidence set in memory, derives Alias Traffic, and forms Canonical Articles
+   deterministically without database access or Transformation Jobs.
 
 Keep Wikimedia Attention Acquisition as the preferred interface for ordinary
-callers. A coordinator initially launches both worker pools and hides their
-ordering from callers.
+callers. It hides Fetching followed by synchronous Transformation from callers;
+only Fetching launches an in-process worker pool.
 
-Use PostgreSQL as the persistent seam between fetching and transformation:
+Use PostgreSQL as the durable source of fetched evidence:
 
-- Queue state and raw Wikimedia evidence are stored in PostgreSQL.
+- Evidence Job state and raw Wikimedia evidence are stored in PostgreSQL.
 - Raw response payloads use `JSONB`.
 - Jobs are scoped to a stable `run_id`.
 - Each job has an idempotent key based on its run, operation, and subject.
@@ -42,19 +44,28 @@ Use PostgreSQL as the persistent seam between fetching and transformation:
 - Resuming a run reuses its recorded Effective Run Configuration and skips
   completed work.
 
-Alias transformation may begin as soon as one alias has complete Pageviews and
-metadata evidence. Canonical Article formation uses a run-level barrier and
-waits until every alias in the complete Candidate Universe has either completed
-or permanently failed.
+Evidence Jobs represent fetching work only: discovery, Pageviews, and metadata.
+Their execution owns atomic claims, expiring leases, bounded retries, recovery,
+and terminal barriers. Wikimedia Evidence Fetching owns phase ordering and runs
+an in-process worker pool. It aborts on terminal discovery failure because that
+would leave an incomplete Candidate Universe; terminal Pageviews or metadata
+failures remain typed evidence and produce publishable degradation.
 
-Run Publication owns final artifact paths and projections. Fetching and
-transformation retain logical evidence identity without embedding filesystem
-layout. Publication is idempotent for a `run_id` and exposes at most one
-completed artifact directory for that run.
+After every alias in the complete Candidate Universe has terminal Pageviews and
+metadata evidence, fetching loads an immutable typed projection from PostgreSQL.
+Wikimedia Attention Transformation consumes that value synchronously and in
+memory. If the process stops before publication, transformation is replayed from
+the persisted fetched evidence rather than resumed through Transformation Jobs.
 
-The PostgreSQL queue initially covers Wikimedia work only. LLM classification
-remains synchronous until model throughput or recovery demonstrates a need for
-the same job mechanism.
+Run Publication owns final artifact paths and projections. Fetching retains
+logical evidence identity without embedding filesystem layout, and
+Transformation preserves that identity in its in-memory result. Publication is
+idempotent for a `run_id` and exposes at most one completed artifact directory
+for that run.
+
+The PostgreSQL queue covers Wikimedia fetching only. Deterministic Wikimedia
+Attention Transformation and LLM classification remain synchronous until cost,
+throughput, or recovery demonstrates a need for another job mechanism.
 
 ## Configuration
 
@@ -73,10 +84,13 @@ Effective Run Configuration is resolved exactly once at startup.
 
 ## Testing
 
-- Queue claiming, lease expiry, uniqueness, barriers, recovery, and resume
-  behavior are tested against real PostgreSQL in an isolated test database or
-  schema.
-- Wikimedia Attention Transformation is tested in memory through its interface.
+- Evidence Job claiming, lease expiry, uniqueness, barriers, recovery, and
+  resume behavior are tested against real PostgreSQL in an isolated test
+  database or schema.
+- Wikimedia Evidence Fetching is tested through its interface with real
+  PostgreSQL and the fixture Wikimedia adapter.
+- Wikimedia Attention Transformation is tested in memory through its interface
+  using typed terminal evidence; it has no database or worker test dependency.
 - Existing live and fixture Wikimedia adapters remain a real adapter seam.
 - End-to-end tests retain the preferred Wikimedia Attention Acquisition
   interface.
@@ -89,6 +103,7 @@ Effective Run Configuration is resolved exactly once at startup.
 
 - Interrupted runs resume instead of refetching completed evidence.
 - Fetching and transformation bugs have separate locality.
+- Deterministic transformation can be replayed without persisted job state.
 - Raw evidence can be inspected and replayed without another Wikimedia request.
 - Worker deployment can later become independent without changing the
   PostgreSQL seam.
@@ -101,8 +116,8 @@ Effective Run Configuration is resolved exactly once at startup.
   operational policy.
 - Idempotent publication must coordinate filesystem state with persisted run
   state.
-- The intermediate evidence representation becomes a maintained contract
-  between two modules.
+- The immutable typed terminal evidence representation becomes a maintained
+  contract between the two modules.
 
 ## Alternatives considered
 

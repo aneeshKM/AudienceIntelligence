@@ -9,11 +9,17 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql://postgres:test@localhost:55432/audience_intelligence_test",
+)
+
+
 def empty_run_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment["AUDIENCE_TREND_MINER_WIKIMEDIA_BASE_URL"] = ""
     environment["GROQ_API_KEY"] = "test-key"
-    environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
+    environment["DATABASE_URL"] = TEST_DATABASE_URL
     return environment
 
 

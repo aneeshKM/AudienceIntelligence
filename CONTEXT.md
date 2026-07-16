@@ -27,23 +27,28 @@ name and adapter modes, never credentials, local paths, or secret-source details
 ## Wikimedia Evidence Fetching
 
 The resumable operation that completes discovery and retrieves raw Pageviews and
-metadata evidence without forming Alias Traffic or Canonical Articles. Fetch jobs
-are run-scoped, idempotent, and leased through PostgreSQL. Raw Wikimedia evidence
-and terminal failures are persisted so work can resume after interruption.
+metadata evidence without forming Alias Traffic or Canonical Articles. It returns
+only after the complete Candidate Universe has terminal Pageviews and metadata
+evidence, projected as an immutable typed value. Fetch jobs are run-scoped,
+idempotent, and leased through PostgreSQL. Raw Wikimedia evidence and terminal
+failures are persisted so work can resume after interruption.
 
 ## Wikimedia Attention Transformation
 
-The deterministic operation that consumes persisted Wikimedia evidence, derives
-Alias Traffic, and forms Canonical Articles. Alias transformations may proceed as
-their evidence becomes ready; Canonical Article formation waits until every alias
-in the Candidate Universe has completed or permanently failed.
+The synchronous, deterministic operation that consumes the immutable terminal
+evidence projected from persisted Wikimedia evidence, derives Alias Traffic, and
+forms Canonical Articles. It has no database or worker dependency and is safely
+replayed after interruption. Canonical Article formation receives every alias in
+the complete Candidate Universe after fetching has completed or permanently
+failed.
 
 ## Evidence Job
 
-One PostgreSQL-backed, run-scoped item of Wikimedia fetching or transformation
-work. An Evidence Job is claimed with an expiring lease, has a bounded attempt
-history, and is uniquely identified within its run so resumed workers cannot
-duplicate completed work.
+One PostgreSQL-backed, run-scoped item of Wikimedia fetching work: discovery,
+Pageviews, or metadata. An Evidence Job is claimed with an expiring lease, has a
+bounded attempt history, and is uniquely identified within its run so resumed
+workers cannot duplicate completed work. Deterministic Wikimedia Attention
+Transformation does not create Evidence Jobs.
 
 ## Qualified Signal
 

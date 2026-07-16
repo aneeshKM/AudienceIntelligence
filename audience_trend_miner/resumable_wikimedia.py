@@ -1,31 +1,23 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
-import random
-from threading import Event
-import time
 
 from audience_trend_miner.evidence_jobs import (
     CompletedEvidence,
     EvidenceJob,
+    EvidenceJobExecution,
     EvidenceJobStore,
     FailedEvidence,
-    ReadyTransformation,
     TerminalEvidence,
 )
 from audience_trend_miner.transformation import (
     AliasEvidenceInput,
-    IncompletePageviewsEvidence,
     TerminalEvidenceFailure,
-    form_wikimedia_attention,
-    transform_alias,
+    TerminalWikimediaEvidence,
+    transform_wikimedia_attention,
 )
 from audience_trend_miner.wikimedia import (
     AcquisitionFailure,
-    AliasEvidence,
-    AliasEvidenceFailure,
-    AliasTraffic,
     AnalysisWindows,
     DailyView,
     IncompleteCandidateUniverseError,
@@ -46,16 +38,53 @@ def acquire_resumable_wikimedia_attention(
     workers: int = 4,
     configuration: dict[str, str] | None = None,
 ) -> WikimediaAttentionResult:
-    store.migrate()
-    store.ensure_run(run_id, configuration or {})
+    """Preferred interface: fetch terminal evidence, then transform it in memory."""
+    evidence = fetch_terminal_wikimedia_evidence(
+        run_id,
+        windows,
+        adapter,
+        store,
+        workers=workers,
+        configuration=configuration,
+    )
+    return transform_wikimedia_attention(evidence, windows)
+
+
+def fetch_terminal_wikimedia_evidence(
+    run_id: str,
+    windows: AnalysisWindows,
+    adapter: WikimediaAdapter,
+    store: EvidenceJobStore,
+    *,
+    workers: int = 4,
+    configuration: dict[str, str] | None = None,
+) -> TerminalWikimediaEvidence:
+    """Fetch and persist complete terminal evidence for one Candidate Universe."""
+    run_facts = {
+        **(configuration or {}),
+        "evidence_max_attempts": "3",
+        "evidence_lease_seconds": "60",
+        "evidence_workers": str(workers),
+        "evidence_backoff": "exponential-jitter-v1",
+    }
+    store.ensure_run(run_id, run_facts)
+    execution = EvidenceJobExecution(store)
     discovery_days = tuple(
         (windows.current_start + timedelta(days=offset)).isoformat()
         for offset in range((windows.current_end - windows.current_start).days + 1)
     )
     store.schedule_discovery(run_id, discovery_days)
-    _drain(run_id, ("discovery",), windows, adapter, store, workers)
+    execution.drain(
+        run_id,
+        ("discovery",),
+        lambda job: _fetch(job, windows, adapter),
+        workers=workers,
+        is_terminal_error=lambda error: isinstance(error, WikimediaPermanentError),
+    )
     discovery = store.results_at_barrier(run_id, ("discovery",))
-    failed_discovery = [item for item in discovery if isinstance(item, FailedEvidence)]
+    failed_discovery = tuple(
+        item for item in discovery if isinstance(item, FailedEvidence)
+    )
     if failed_discovery:
         failure = failed_discovery[0]
         raise IncompleteCandidateUniverseError(
@@ -63,6 +92,7 @@ def acquire_resumable_wikimedia_attention(
                 "discovery", failure.subject, failure.attempts, failure.reason
             )
         )
+
     titles = tuple(
         sorted(
             {
@@ -74,67 +104,24 @@ def acquire_resumable_wikimedia_attention(
         )
     )
     store.schedule_alias_evidence(run_id, titles)
-    fetch_workers = max(1, workers // 2)
-    transformations_done = Event()
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        fetching = executor.submit(
-            _drain,
-            run_id,
-            ("pageviews", "metadata"),
-            windows,
-            adapter,
-            store,
-            fetch_workers,
-            transformations_done,
-        )
-        transforming = executor.submit(
-            _drain_transformations,
-            run_id,
-            windows,
-            store,
-            transformations_done,
-        )
-        fetching.result()
-        transforming.result()
-    return _form_attention(
-        titles,
-        store.results_at_barrier(
-            run_id, ("discovery", "pageviews", "metadata", "transform")
-        ),
-        windows,
+    execution.drain(
+        run_id,
+        ("pageviews", "metadata"),
+        lambda job: _fetch(job, windows, adapter),
+        workers=workers,
+        is_terminal_error=lambda error: isinstance(error, WikimediaPermanentError),
     )
+    evidence = store.results_at_barrier(
+        run_id, ("discovery", "pageviews", "metadata")
+    )
+    return _terminal_projection(titles, evidence)
 
 
-def _drain(
-    run_id, operations, windows, adapter, store, workers, done: Event | None = None
-) -> None:
-    def work(worker_number: int) -> None:
-        while (
-            done is not None and not done.is_set()
-        ) or not store.barrier_reached(run_id, operations):
-            job = store.claim(
-                f"worker-{worker_number}",
-                lease_seconds=60,
-                run_id=run_id,
-                operations=operations,
-            )
-            if job is None:
-                time.sleep(0.01)
-                continue
-            try:
-                store.complete(job, _fetch(job, windows, adapter))
-            except Exception as error:
-                terminal = isinstance(error, WikimediaPermanentError) or job.attempts >= 3
-                store.fail(job, str(error), terminal=terminal)
-                if not terminal and not getattr(error, "retry_immediately", False):
-                    delay = 2 ** (job.attempts - 1)
-                    time.sleep(delay + random.uniform(0, delay))
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        tuple(executor.map(work, range(workers)))
-
-
-def _fetch(job: EvidenceJob, windows: AnalysisWindows, adapter: WikimediaAdapter) -> dict:
+def _fetch(
+    job: EvidenceJob,
+    windows: AnalysisWindows,
+    adapter: WikimediaAdapter,
+) -> dict[str, object]:
     if job.operation == "discovery":
         response = adapter.daily_top_pages(date.fromisoformat(job.subject))
         return {"titles": list(response.titles), "raw": response.raw}
@@ -142,6 +129,7 @@ def _fetch(job: EvidenceJob, windows: AnalysisWindows, adapter: WikimediaAdapter
         response = adapter.article_pageviews(
             job.subject, windows.previous_start, windows.current_end
         )
+        _validate_pageviews(response.daily_views, windows)
         return {
             "daily_views": [
                 {"date": item.date.isoformat(), "views": item.views}
@@ -149,56 +137,57 @@ def _fetch(job: EvidenceJob, windows: AnalysisWindows, adapter: WikimediaAdapter
             ],
             "raw": response.raw,
         }
-    response = adapter.article_metadata(job.subject)
-    return {
-        "page_id": response.page_id,
-        "canonical_title": response.canonical_title,
-        "extract": response.extract,
-        "categories": list(response.categories),
-        "raw": response.raw,
-    }
+    if job.operation == "metadata":
+        response = adapter.article_metadata(job.subject)
+        return {
+            "page_id": response.page_id,
+            "canonical_title": response.canonical_title,
+            "extract": response.extract,
+            "categories": list(response.categories),
+            "raw": response.raw,
+        }
+    raise ValueError(f"unsupported Evidence Job operation: {job.operation}")
 
 
-def _drain_transformations(
-    run_id: str,
-    windows: AnalysisWindows,
-    store: EvidenceJobStore,
-    done: Event,
+def _validate_pageviews(
+    daily_views: tuple[DailyView, ...], windows: AnalysisWindows
 ) -> None:
-    try:
-        while True:
-            if store.barrier_reached(run_id, ("transform",)):
-                return
-            ready = store.claim_ready_transformation(
-                "transformer",
-                lease_seconds=60,
-                run_id=run_id,
-            )
-            if ready is None:
-                time.sleep(0.01)
-                continue
-            try:
-                result = transform_alias(_alias_input(ready), windows)
-                if isinstance(result, IncompletePageviewsEvidence):
-                    store.recover_incomplete_pageviews(ready.job, result.reason)
-                else:
-                    store.complete(ready.job, _encode_transformation(result))
-            except Exception as error:
-                store.fail(
-                    ready.job, str(error), terminal=ready.job.attempts >= 3
-                )
-    finally:
-        done.set()
-
-
-def _alias_input(ready: ReadyTransformation) -> AliasEvidenceInput:
-    return _alias_input_from_evidence(
-        ready.job.subject, ready.pageviews, ready.metadata
+    expected_dates = tuple(
+        windows.previous_start + timedelta(days=offset)
+        for offset in range((windows.current_end - windows.previous_start).days + 1)
     )
+    if tuple(item.date for item in daily_views) != expected_dates:
+        raise ValueError(
+            "Pageviews evidence must contain complete dated observations "
+            f"from {windows.previous_start} through {windows.current_end}"
+        )
 
 
-def _alias_input_from_evidence(
-    title: str, pageviews: TerminalEvidence, metadata: TerminalEvidence
+def _terminal_projection(
+    titles: tuple[str, ...], evidence: tuple[TerminalEvidence, ...]
+) -> TerminalWikimediaEvidence:
+    indexed = {(item.operation, item.subject): item for item in evidence}
+    aliases = tuple(
+        _alias_input(
+            title,
+            indexed[("pageviews", title)],
+            indexed[("metadata", title)],
+        )
+        for title in titles
+    )
+    artifacts = tuple(
+        RawArtifact(item.operation, item.subject, item.evidence["raw"])
+        for item in evidence
+        if isinstance(item, CompletedEvidence)
+        and item.operation in {"discovery", "pageviews", "metadata"}
+    )
+    return TerminalWikimediaEvidence(titles, aliases, artifacts)
+
+
+def _alias_input(
+    title: str,
+    pageviews: TerminalEvidence,
+    metadata: TerminalEvidence,
 ) -> AliasEvidenceInput:
     pageviews_value = (
         tuple(
@@ -219,123 +208,6 @@ def _alias_input_from_evidence(
             {},
         )
         if isinstance(metadata, CompletedEvidence)
-        else TerminalEvidenceFailure(
-            "metadata", metadata.attempts, metadata.reason
-        )
+        else TerminalEvidenceFailure("metadata", metadata.attempts, metadata.reason)
     )
     return AliasEvidenceInput(title, pageviews_value, metadata_value)
-
-
-def _form_attention(
-    titles: tuple[str, ...], evidence: tuple[TerminalEvidence, ...], windows: AnalysisWindows
-) -> WikimediaAttentionResult:
-    aliases: list[AliasEvidence | AliasEvidenceFailure] = []
-    artifacts = []
-    for item in evidence:
-        if not isinstance(item, CompletedEvidence):
-            continue
-        if item.operation in {"discovery", "pageviews", "metadata"}:
-            artifacts.append(
-                RawArtifact(item.operation, item.subject, item.evidence["raw"])
-            )
-    indexed = {(item.operation, item.subject): item for item in evidence}
-    for title in titles:
-        transformed = indexed[("transform", title)]
-        if isinstance(transformed, FailedEvidence):
-            aliases.append(
-                AliasEvidenceFailure(
-                    AcquisitionFailure(
-                        "canonicalization",
-                        title,
-                        transformed.attempts,
-                        transformed.reason,
-                    ),
-                    (),
-                )
-            )
-            continue
-        payload = transformed.evidence
-        if payload.get("version") == 2:
-            aliases.append(_decode_transformation(title, payload))
-            continue
-        # Transitional decoder for transformation jobs written before this refactor.
-        legacy = transform_alias(
-            _alias_input_from_evidence(
-                title,
-                indexed[("pageviews", title)],
-                indexed[("metadata", title)],
-            ),
-            windows,
-        )
-        if isinstance(legacy, IncompletePageviewsEvidence):
-            raise ValueError(legacy.reason)
-        aliases.append(legacy)
-    result = form_wikimedia_attention(titles, tuple(aliases))
-    return WikimediaAttentionResult(
-        result.raw_candidate_titles,
-        result.canonical_articles,
-        tuple(artifacts),
-        result.failures,
-    )
-
-
-def _encode_transformation(result: AliasEvidence | AliasEvidenceFailure) -> dict:
-    if isinstance(result, AliasEvidenceFailure):
-        return {
-            "version": 2,
-            "kind": "failure",
-            "operation": result.failure.operation,
-            "attempts": result.failure.attempts,
-            "reason": result.failure.reason,
-        }
-    return {
-        "version": 2,
-        "kind": "alias",
-        "traffic": {
-            "previous_window_views": result.traffic.previous_window_views,
-            "current_window_views": result.traffic.current_window_views,
-            "daily_views": [
-                {"date": item.date.isoformat(), "views": item.views}
-                for item in result.traffic.daily_views
-            ],
-        },
-        "metadata": {
-            "page_id": result.metadata.page_id,
-            "canonical_title": result.metadata.canonical_title,
-            "extract": result.metadata.extract,
-            "categories": list(result.metadata.categories),
-        },
-    }
-
-
-def _decode_transformation(
-    title: str, payload: dict
-) -> AliasEvidence | AliasEvidenceFailure:
-    if payload["kind"] == "failure":
-        return AliasEvidenceFailure(
-            AcquisitionFailure(
-                payload["operation"], title, payload["attempts"], payload["reason"]
-            ),
-            (),
-        )
-    traffic = payload["traffic"]
-    metadata = payload["metadata"]
-    return AliasEvidence(
-        AliasTraffic(
-            title,
-            traffic["previous_window_views"],
-            traffic["current_window_views"],
-            tuple(
-                DailyView(date.fromisoformat(item["date"]), item["views"])
-                for item in traffic["daily_views"]
-            ),
-        ),
-        MetadataResponse(
-            metadata["page_id"],
-            metadata["canonical_title"],
-            metadata["extract"],
-            tuple(metadata["categories"]),
-            {},
-        ),
-        (),
-    )

@@ -10,6 +10,12 @@ from datetime import date, timedelta
 from pathlib import Path
 
 
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql://postgres:test@localhost:55432/audience_intelligence_test",
+)
+
+
 def fixture_payload() -> dict[str, object]:
     return {
         "discovery": {
@@ -169,7 +175,7 @@ class CliWikimediaTest(unittest.TestCase):
             environment = os.environ.copy()
             environment.update(
                 {
-                    "DATABASE_URL": "postgresql://postgres:test@localhost:55432/audience_intelligence_test",
+                    "DATABASE_URL": TEST_DATABASE_URL,
                     "AUDIENCE_TREND_MINER_TEST_MODE": "1",
                     "AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE": str(wikimedia_path),
                     "AUDIENCE_TREND_MINER_CLASSIFICATION_FIXTURE": str(classification_path),
@@ -275,7 +281,7 @@ class CliWikimediaTest(unittest.TestCase):
             write_embedding_fixture(embedding_path, [[1.0, 0.0]])
             output_directory = temporary_path / "runs"
             environment = os.environ.copy()
-            environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
+            environment["DATABASE_URL"] = TEST_DATABASE_URL
             environment["AUDIENCE_TREND_MINER_TEST_MODE"] = "1"
             environment["AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE"] = str(
                 wikimedia_path
@@ -347,7 +353,7 @@ class CliWikimediaTest(unittest.TestCase):
             write_embedding_fixture(embedding_path, [[1.0, 0.0]])
             output_directory = temporary_path / "runs"
             environment = os.environ.copy()
-            environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
+            environment["DATABASE_URL"] = TEST_DATABASE_URL
             environment["AUDIENCE_TREND_MINER_TEST_MODE"] = "1"
             environment["AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE"] = str(
                 wikimedia_path
@@ -396,7 +402,7 @@ class CliWikimediaTest(unittest.TestCase):
             fixture_path.write_text(json.dumps(fixture_payload()))
             output_directory = temporary_path / "runs"
             environment = os.environ.copy()
-            environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
+            environment["DATABASE_URL"] = TEST_DATABASE_URL
             environment["AUDIENCE_TREND_MINER_TEST_MODE"] = "1"
             environment["AUDIENCE_TREND_MINER_WIKIMEDIA_BASE_URL"] = ""
             environment["GROQ_API_KEY"] = "test-key"
@@ -440,7 +446,7 @@ class CliWikimediaTest(unittest.TestCase):
             fixture_path.write_text(json.dumps(payload))
             output_directory = temporary_path / "runs"
             environment = os.environ.copy()
-            environment["DATABASE_URL"] = "postgresql://postgres:test@localhost:55432/audience_intelligence_test"
+            environment["DATABASE_URL"] = TEST_DATABASE_URL
             environment["AUDIENCE_TREND_MINER_TEST_MODE"] = "1"
             environment["AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE"] = str(fixture_path)
             environment["GROQ_API_KEY"] = "test-key"

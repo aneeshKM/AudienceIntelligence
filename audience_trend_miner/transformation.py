@@ -12,6 +12,7 @@ from audience_trend_miner.wikimedia import (
     CanonicalArticle,
     DailyView,
     MetadataResponse,
+    RawArtifact,
     WikimediaAttentionResult,
 )
 
@@ -34,6 +35,15 @@ class AliasEvidenceInput:
 class IncompletePageviewsEvidence:
     raw_title: str
     reason: str
+
+
+@dataclass(frozen=True)
+class TerminalWikimediaEvidence:
+    """Complete, immutable fetching outcome for one Candidate Universe."""
+
+    raw_candidate_titles: tuple[str, ...]
+    aliases: tuple[AliasEvidenceInput, ...]
+    raw_artifacts: tuple[RawArtifact, ...]
 
 
 type AliasTransformation = (
@@ -120,6 +130,28 @@ def form_wikimedia_attention(
         )
     return WikimediaAttentionResult(
         raw_candidate_titles, tuple(articles), (), tuple(failures)
+    )
+
+
+def transform_wikimedia_attention(
+    evidence: TerminalWikimediaEvidence,
+    windows: AnalysisWindows,
+) -> WikimediaAttentionResult:
+    """Synchronously transform terminal fetched evidence without database access."""
+    aliases: list[AliasEvidence | AliasEvidenceFailure] = []
+    for alias_input in evidence.aliases:
+        transformed = transform_alias(alias_input, windows)
+        if isinstance(transformed, IncompletePageviewsEvidence):
+            raise ValueError(
+                "terminal Pageviews evidence is incomplete: " + transformed.reason
+            )
+        aliases.append(transformed)
+    result = form_wikimedia_attention(evidence.raw_candidate_titles, tuple(aliases))
+    return WikimediaAttentionResult(
+        result.raw_candidate_titles,
+        result.canonical_articles,
+        evidence.raw_artifacts,
+        result.failures,
     )
 
 

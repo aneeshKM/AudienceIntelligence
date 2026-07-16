@@ -118,39 +118,6 @@ class EvidenceJobStoreTest(unittest.TestCase):
         self.assertEqual(successful[0].evidence, {"items": [{"views": 42}]})
         self.assertEqual(failures[0].reason, "unavailable")
 
-    def test_incomplete_transformation_retries_completed_upstream_evidence(self) -> None:
-        self.store.schedule_alias_evidence("run-1", ("Alias_A",))
-        pageviews = self.store.claim(
-            "fetcher", lease_seconds=60, operations=("pageviews",)
-        )
-        self.store.complete(pageviews, {"daily_views": []})
-        self.assertIsNone(
-            self.store.claim_ready_transformation(
-                "transformer", lease_seconds=60, run_id="run-1"
-            )
-        )
-        metadata = self.store.claim(
-            "fetcher", lease_seconds=60, operations=("metadata",)
-        )
-        self.store.complete(metadata, {"page_id": 1})
-        ready = self.store.claim_ready_transformation(
-            "transformer", lease_seconds=60, run_id="run-1"
-        )
-
-        self.store.recover_incomplete_pageviews(
-            ready.job, "dated observations incomplete"
-        )
-
-        reacquired = self.store.claim(
-            "fetcher", lease_seconds=60, operations=("pageviews",)
-        )
-        self.assertEqual(reacquired.subject, "Alias_A")
-        self.assertIsNone(
-            self.store.claim_ready_transformation(
-                "other-transformer", lease_seconds=60, run_id="run-1"
-            )
-        )
-
     def test_barrier_does_not_expose_partial_evidence(self) -> None:
         self.store.schedule_discovery("run-1", ("2026-07-08", "2026-07-09"))
         first = self.store.claim(
@@ -201,9 +168,43 @@ class EvidenceJobStoreTest(unittest.TestCase):
 
         self.assertEqual(adapter.calls, calls_after_first)
         self.assertEqual(first.canonical_articles, second.canonical_articles)
-        transformed = self.store.results_at_barrier("stable-run", ("transform",))
-        self.assertEqual(len(transformed), 1)
-        self.assertIsInstance(transformed[0], CompletedEvidence)
+        fetched = self.store.results_at_barrier(
+            "stable-run", ("discovery", "pageviews", "metadata")
+        )
+        self.assertEqual(len(fetched), 9)
+        self.assertFalse(any(item.operation == "transform" for item in fetched))
+
+    def test_incomplete_pageviews_exhaust_as_fetching_degradation(self) -> None:
+        adapter = FixtureWikimediaAdapter(
+            discovery={
+                (date(2026, 7, 8) + timedelta(days=offset)).isoformat(): ["Alias_A"]
+                for offset in range(7)
+            },
+            pageviews={"Alias_A": []},
+            metadata={
+                "Alias_A": {
+                    "page_id": 42,
+                    "canonical_title": "Canonical A",
+                    "extract": "Lead.",
+                    "categories": [],
+                }
+            },
+        )
+        windows = AnalysisWindows(
+            date(2026, 7, 1), date(2026, 7, 7), date(2026, 7, 8), date(2026, 7, 14)
+        )
+
+        result = acquire_resumable_wikimedia_attention(
+            "incomplete-pageviews", windows, adapter, self.store, workers=2
+        )
+
+        self.assertTrue(result.degraded)
+        self.assertEqual(result.failures[0].operation, "pageviews")
+        pageviews = self.store.results_at_barrier(
+            "incomplete-pageviews", ("pageviews",)
+        )[0]
+        self.assertIsInstance(pageviews, FailedEvidence)
+        self.assertEqual(pageviews.attempts, 3)
 
 
 class CountingAdapter:

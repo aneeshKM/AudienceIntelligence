@@ -62,11 +62,12 @@ Discovery uses Wikimedia's public APIs by default. If any daily top-page
 response is still unavailable after three attempts, the command exits without
 creating a partial run directory.
 
-Wikimedia fetching and deterministic transformation communicate through leased,
-idempotent PostgreSQL jobs. Set `DATABASE_URL` to the PostgreSQL database used
-for run state and raw `JSONB` evidence. Fetch and transformation workers overlap;
-Canonical Article formation waits until every Candidate Universe alias reaches a
-terminal state.
+Wikimedia discovery, Pageviews, and metadata fetching use leased, idempotent
+PostgreSQL Evidence Jobs. Set `DATABASE_URL` to the PostgreSQL database used for
+run state and raw `JSONB` evidence. After every Candidate Universe alias reaches
+a terminal fetching state, deterministic transformation runs synchronously in
+memory to form Alias Traffic and Canonical Articles. Interrupted transformation
+is safely replayed from the persisted fetched evidence.
 
 Deterministic integration runs can select the fixture adapter with
 `AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE=/path/to/fixture.json`. The fixture is

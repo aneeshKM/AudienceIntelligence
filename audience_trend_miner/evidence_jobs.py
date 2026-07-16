@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import json
-from typing import Any
+import random
+import time
+from typing import Any, Callable
 from uuid import UUID
 
 import psycopg
@@ -39,13 +42,6 @@ class FailedEvidence:
 
 
 TerminalEvidence = CompletedEvidence | FailedEvidence
-
-
-@dataclass(frozen=True)
-class ReadyTransformation:
-    job: EvidenceJob
-    pageviews: TerminalEvidence
-    metadata: TerminalEvidence
 
 
 class EvidenceJobStore:
@@ -152,6 +148,7 @@ class EvidenceJobStore:
         lease_seconds: int,
         run_id: str | None = None,
         operations: tuple[str, ...] | None = None,
+        max_attempts: int = 3,
     ) -> EvidenceJob | None:
         with psycopg.connect(self.database_url) as connection:
             connection.execute(
@@ -159,7 +156,8 @@ class EvidenceJobStore:
                           error = 'lease attempts exhausted', claimed_by = NULL,
                           claim_token = NULL, lease_expires_at = NULL
                    WHERE status = 'claimed' AND lease_expires_at <= now()
-                     AND attempts >= 3"""
+                     AND attempts >= %s""",
+                (max_attempts,),
             )
             row = connection.execute(
                 """
@@ -185,75 +183,6 @@ class EvidenceJobStore:
             ).fetchone()
         return EvidenceJob(*row) if row else None
 
-    def claim_ready_transformation(
-        self, worker: str, *, lease_seconds: int, run_id: str
-    ) -> ReadyTransformation | None:
-        with psycopg.connect(self.database_url) as connection:
-            connection.execute(
-                """UPDATE evidence_jobs SET status = 'failed',
-                          error = 'lease attempts exhausted', claimed_by = NULL,
-                          claim_token = NULL, lease_expires_at = NULL
-                   WHERE run_id = %s AND operation = 'transform'
-                     AND status = 'claimed' AND lease_expires_at <= now()
-                     AND attempts >= 3""",
-                (run_id,),
-            )
-            connection.execute(
-                """INSERT INTO evidence_jobs (run_id, operation, subject)
-                   SELECT pageviews.run_id, 'transform', pageviews.subject
-                   FROM evidence_jobs AS pageviews
-                   JOIN evidence_jobs AS metadata
-                     ON metadata.run_id = pageviews.run_id
-                    AND metadata.subject = pageviews.subject
-                    AND metadata.operation = 'metadata'
-                   WHERE pageviews.run_id = %s
-                     AND pageviews.operation = 'pageviews'
-                     AND pageviews.status IN ('completed', 'failed')
-                     AND metadata.status IN ('completed', 'failed')
-                   ON CONFLICT DO NOTHING""",
-                (run_id,),
-            )
-            row = connection.execute(
-                """WITH available AS (
-                       SELECT transformation.id
-                       FROM evidence_jobs AS transformation
-                       JOIN evidence_jobs AS pageviews
-                         ON pageviews.run_id = transformation.run_id
-                        AND pageviews.subject = transformation.subject
-                        AND pageviews.operation = 'pageviews'
-                       JOIN evidence_jobs AS metadata
-                         ON metadata.run_id = transformation.run_id
-                        AND metadata.subject = transformation.subject
-                        AND metadata.operation = 'metadata'
-                       WHERE transformation.run_id = %s
-                         AND transformation.operation = 'transform'
-                         AND (transformation.status = 'pending'
-                           OR (transformation.status = 'claimed'
-                             AND transformation.lease_expires_at <= now()))
-                         AND pageviews.status IN ('completed', 'failed')
-                         AND metadata.status IN ('completed', 'failed')
-                       ORDER BY transformation.subject
-                       FOR UPDATE OF transformation SKIP LOCKED LIMIT 1
-                   )
-                   UPDATE evidence_jobs AS jobs
-                   SET status = 'claimed', claimed_by = %s,
-                       lease_expires_at = now() + (%s * interval '1 second'),
-                       attempts = attempts + 1, claim_token = gen_random_uuid()
-                   FROM available WHERE jobs.id = available.id
-                   RETURNING jobs.id, jobs.run_id, jobs.operation, jobs.subject,
-                             jobs.status, jobs.attempts, jobs.claimed_by,
-                             jobs.claim_token""",
-                (run_id, worker, lease_seconds),
-            ).fetchone()
-        job = EvidenceJob(*row) if row else None
-        if job is None:
-            return None
-        dependencies = self._terminal_evidence(
-            run_id, ("pageviews", "metadata"), subject=job.subject
-        )
-        indexed = {item.operation: item for item in dependencies}
-        return ReadyTransformation(job, indexed["pageviews"], indexed["metadata"])
-
     def complete(self, job: EvidenceJob, evidence: object) -> None:
         self._finish(job, "completed", evidence=evidence)
 
@@ -267,33 +196,6 @@ class EvidenceJobStore:
             ).rowcount
         if updated != 1:
             raise RuntimeError("evidence job lease was lost before failure update")
-
-    def recover_incomplete_pageviews(
-        self,
-        transformation: EvidenceJob,
-        reason: str,
-    ) -> None:
-        """Return a transformation and its invalid upstream evidence to schedulable states."""
-        with psycopg.connect(self.database_url) as connection:
-            transformed = connection.execute(
-                """UPDATE evidence_jobs SET status = 'pending', error = NULL,
-                          claimed_by = NULL, claim_token = NULL, lease_expires_at = NULL
-                   WHERE id = %s AND claim_token = %s AND status = 'claimed'""",
-                (transformation.id, transformation.claim_token),
-            ).rowcount
-            evidence = connection.execute(
-                """UPDATE evidence_jobs
-                   SET status = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END,
-                       evidence = NULL, error = %s,
-                       claimed_by = NULL, claim_token = NULL, lease_expires_at = NULL
-                   WHERE run_id = %s AND operation = 'pageviews' AND subject = %s
-                     AND status = 'completed'""",
-                (reason, transformation.run_id, transformation.subject),
-            ).rowcount
-            if transformed != 1 or evidence != 1:
-                raise RuntimeError(
-                    "incomplete evidence changed before retry transition"
-                )
 
     def _finish(self, job: EvidenceJob, status: str, *, evidence: object) -> None:
         with psycopg.connect(self.database_url) as connection:
@@ -314,17 +216,7 @@ class EvidenceJobStore:
                      AND status NOT IN ('completed','failed')""",
                 (run_id, list(operations)),
             ).fetchone()[0]
-            missing_transformations = 0
-            if "transform" in operations:
-                missing_transformations = connection.execute(
-                    """SELECT
-                           (SELECT count(*) FROM evidence_jobs
-                            WHERE run_id = %s AND operation = 'pageviews')
-                         - (SELECT count(*) FROM evidence_jobs
-                            WHERE run_id = %s AND operation = 'transform')""",
-                    (run_id, run_id),
-                ).fetchone()[0]
-        return unfinished == 0 and missing_transformations == 0
+        return unfinished == 0
 
     def results_at_barrier(
         self, run_id: str, operations: tuple[str, ...]
@@ -361,3 +253,57 @@ class EvidenceJobStore:
         with psycopg.connect(self.database_url) as connection:
             connection.execute("TRUNCATE evidence_jobs")
             connection.execute("TRUNCATE acquisition_runs")
+
+
+class EvidenceJobExecution:
+    """Run fetch Evidence Jobs while hiding lifecycle policy from callers."""
+
+    def __init__(
+        self,
+        store: EvidenceJobStore,
+        *,
+        max_attempts: int = 3,
+        lease_seconds: int = 60,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+    ) -> None:
+        self.store = store
+        self.max_attempts = max_attempts
+        self.lease_seconds = lease_seconds
+        self.sleep = sleep
+        self.jitter = jitter
+
+    def drain(
+        self,
+        run_id: str,
+        operations: tuple[str, ...],
+        handler: Callable[[EvidenceJob], object],
+        *,
+        workers: int,
+        is_terminal_error: Callable[[Exception], bool],
+    ) -> None:
+        def work(worker_number: int) -> None:
+            while not self.store.barrier_reached(run_id, operations):
+                job = self.store.claim(
+                    f"fetcher-{worker_number}",
+                    lease_seconds=self.lease_seconds,
+                    run_id=run_id,
+                    operations=operations,
+                    max_attempts=self.max_attempts,
+                )
+                if job is None:
+                    self.sleep(0.01)
+                    continue
+                try:
+                    self.store.complete(job, handler(job))
+                except Exception as error:
+                    terminal = (
+                        is_terminal_error(error) or job.attempts >= self.max_attempts
+                    )
+                    self.store.fail(job, str(error), terminal=terminal)
+                    if not terminal and not getattr(error, "retry_immediately", False):
+                        delay = 2 ** (job.attempts - 1)
+                        self.sleep(delay + self.jitter(0, delay))
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            tuple(executor.map(work, range(workers)))

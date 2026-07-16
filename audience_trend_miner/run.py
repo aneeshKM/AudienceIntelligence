@@ -75,7 +75,6 @@ def execute_run(
     }
     job_store = EvidenceJobStore(configuration.database_url)
     job_store.migrate()
-    job_store.ensure_run(effective_run_id, recorded_run_facts)
     if adapter is not None:
         attention = acquire_resumable_wikimedia_attention(
             effective_run_id,
@@ -84,6 +83,8 @@ def execute_run(
             job_store,
             configuration=recorded_run_facts,
         )
+    else:
+        job_store.ensure_run(effective_run_id, recorded_run_facts)
     qualification = qualify_trends(attention.canonical_articles)
     classification = ArticleClassificationResult((), (), ())
     generator: StructuredGenerator | None = None

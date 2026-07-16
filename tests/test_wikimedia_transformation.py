@@ -7,8 +7,10 @@ from audience_trend_miner.transformation import (
     AliasEvidenceInput,
     IncompletePageviewsEvidence,
     TerminalEvidenceFailure,
+    TerminalWikimediaEvidence,
     form_wikimedia_attention,
     transform_alias,
+    transform_wikimedia_attention,
 )
 from audience_trend_miner.wikimedia import (
     AliasEvidence,
@@ -16,6 +18,7 @@ from audience_trend_miner.wikimedia import (
     AnalysisWindows,
     DailyView,
     MetadataResponse,
+    RawArtifact,
 )
 
 
@@ -39,6 +42,18 @@ def metadata(title: str, page_id: int = 42) -> MetadataResponse:
 
 
 class WikimediaAttentionTransformationTest(unittest.TestCase):
+    def test_transforms_terminal_evidence_through_the_module_interface(self) -> None:
+        evidence = TerminalWikimediaEvidence(
+            ("Alias_A",),
+            (AliasEvidenceInput("Alias_A", daily(10, 20), metadata("Canonical A")),),
+            (RawArtifact("metadata", "Alias_A", {"pageid": 42}),),
+        )
+
+        result = transform_wikimedia_attention(evidence, WINDOWS)
+
+        self.assertEqual(result.canonical_articles[0].canonical_title, "Canonical A")
+        self.assertEqual(result.raw_artifacts, evidence.raw_artifacts)
+
     def test_transforms_complete_alias_evidence_and_forms_canonical_article(self) -> None:
         first = transform_alias(
             AliasEvidenceInput("Alias_A", daily(10, 20), metadata("Canonical A")),
