@@ -1,0 +1,33 @@
+“Trending Audience” Builder (Public Wikimedia)
+The Scenario
+Companies constantly try to identify cultural or market trends early to package them into high-value audience
+segments for brands. Manual analysis is too slow to catch viral trends. Your job is to build a prototype of an
+autonomous Audience Trend Miner that transforms real-time search traffic into actionable target
+demographics.
+What is an audience segment?
+In advertising and marketing, an audience segment is a group of people bundled together because
+they share a trait, interest, behavior, or intent that makes them worth targeting as a unit. For example,
+“new parents,” “budget-conscious travelers,” or “people upgrading their home for energy efficiency.”
+Brands buy access to segments rather than to individuals: instead of advertising to everyone, they
+pay to reach the specific group most likely to care about their product.
+A good segment is (1) coherent — the members genuinely belong together; (2) sizable enough to be
+worth a campaign; and (3) commercially meaningful — you can name the kinds of brands that would
+pay to reach it. Your job in this project is to automatically discover such segments from what the
+public is suddenly reading on Wikipedia, and to describe each one as a marketer would.
+Your Task
+Using the free, public Wikipedia Pageviews API, fetch the top trending articles for the week. Your agentic
+pipeline must analyze this raw list, filter out non-commercial noise (e.g., random historical figures or breaking
+global news tragedies), and synthesize the remaining trends into a structured "Emerging Audience Portfolio."
+For each target audience discovered, the engine must dynamically generate:
+● Audience Name: A catchy, market-friendly taxonomy name.
+● Audience Description: A brief narrative detailing why this group is suddenly trending based on
+Wikipedia traffic signals.
+● Estimated Size Index: A normalized calculation relative to total trending traffic.
+● Potential Buying Power: A smart qualitative LLM assessment of the group’s high/medium/low
+commercial value and the types of brands that should target them that yields results a human editor
+would give thumbs up to
+The Public Data & Technical Guardrails
+● Data Source: Free Wikipedia Pageviews API (unauthenticated, raw JSON return).
+● The Constraint: The candidate must write a clean custom grouping/clustering loop (via embeddings or
+LLM state architecture) to merge disparate trending topics (e.g., merging pages about "Solar Panels,"
+"Heat Pumps," and "Electric Bikes" into an “Eco-Home Modernizers” audience).
