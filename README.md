@@ -5,8 +5,10 @@ Portfolio. A run discovers the complete current-window candidate universe from
 English Wikipedia, retrieves exact traffic across both analysis windows, and
 canonicalizes aliases without fabricating audiences.
 It then applies auditable traffic, growth, and trend-score gates and removes only
-explicit technical or navigational noise. Qualified articles remain attention
-signals for later clustering; the CLI does not present them as audiences.
+explicit technical or navigational noise. Qualified articles then pass through a
+strict, fail-closed commercial-relevance and brand-safety judgment before they
+remain attention signals for later clustering; the CLI does not present them as
+audiences.
 
 ## Install on macOS
 
@@ -36,6 +38,9 @@ timestamped directory containing:
 - `report.html` — static report, including a valid empty state
 - `audit.json` — run status, decisions, and failures
 - `wikimedia/` — saved discovery, Pageviews, metadata, and canonical artifacts
+- `classification/article_judgments.json` — prompts, raw model outputs,
+  validation results, decisions, and complete attempt histories (when articles
+  reach classification)
 
 Run Publication is atomic: artifacts are assembled and validated before being
 staged, and the timestamped directory appears only after every file is complete.
@@ -52,6 +57,14 @@ not reproduce Wikimedia URL paths.
 
 The current and previous analysis windows are complete seven-day periods. The
 current window ends two days before the effective as-of date.
+
+Article classification calls Groq directly. Set `GROQ_API_KEY` for production
+runs. The default model is `openai/gpt-oss-120b`; override it with
+`AUDIENCE_TREND_MINER_MODEL`. Deterministic integration runs can instead set
+`AUDIENCE_TREND_MINER_CLASSIFICATION_FIXTURE` to a JSON file containing a
+`responses` array. Invalid output and request failures are retried three total
+times with exponential backoff and jitter, then rejected with their evidence
+preserved in the audit.
 
 ## Test
 

@@ -9,6 +9,11 @@ from pathlib import Path
 import jsonschema
 
 from audience_trend_miner.publication import PublicationInput, publish_run
+from audience_trend_miner.classification import (
+    ArticleClassificationResult,
+    classify_articles,
+)
+from tests.test_article_classification import ScriptedGenerator, judgment
 from audience_trend_miner.trends import TrendQualificationResult, qualify_trends
 from audience_trend_miner.wikimedia import (
     AcquisitionFailure,
@@ -26,6 +31,7 @@ def publication_input(
     *,
     attention: WikimediaAttentionResult = WikimediaAttentionResult((), (), ()),
     qualification: TrendQualificationResult = TrendQualificationResult((), (), ()),
+    classification: ArticleClassificationResult = ArticleClassificationResult((), (), ()),
 ) -> PublicationInput:
     return PublicationInput(
         output_root=output_root,
@@ -40,6 +46,7 @@ def publication_input(
         ),
         attention=attention,
         qualification=qualification,
+        classification=classification,
     )
 
 
@@ -122,6 +129,11 @@ class RunPublicationTest(unittest.TestCase):
                     Path(temporary_directory) / "runs",
                     attention=attention,
                     qualification=qualify_trends((noise, article)),
+                    classification=classify_articles(
+                        (article,),
+                        ScriptedGenerator(judgment()),
+                        sleep=lambda _: None,
+                    ),
                 )
             )
             audit = json.loads((published / "audit.json").read_text())
@@ -139,7 +151,7 @@ class RunPublicationTest(unittest.TestCase):
                 for decision in audit["decisions"]
                 if decision["canonical_title"] == "Commercial Signal"
             ),
-            ["all_qualification_gates_passed"],
+            ["classification_accepted"],
         )
         self.assertIn("Qualified attention signals", report)
         self.assertIn("Rejected deterministic noise", report)
@@ -164,6 +176,55 @@ class RunPublicationTest(unittest.TestCase):
             self.assertTrue(output_root.is_dir())
             self.assertEqual(list(output_root.iterdir()), [])
 
+    def test_retains_only_accepted_articles_and_publishes_complete_classification_evidence(self) -> None:
+        accepted_article = _qualified_article(42, "Home espresso")
+        rejected_article = _qualified_article(43, "Election result")
+        qualification = qualify_trends((accepted_article, rejected_article))
+        classification = classify_articles(
+            tuple(item.article for item in qualification.qualified),
+            ScriptedGenerator(judgment(), judgment("routine_politics")),
+            sleep=lambda _: None,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            published = publish_run(
+                publication_input(
+                    Path(temporary_directory) / "runs",
+                    attention=WikimediaAttentionResult(
+                        (), (accepted_article, rejected_article), ()
+                    ),
+                    qualification=qualification,
+                    classification=classification,
+                )
+            )
+            audit = json.loads((published / "audit.json").read_text())
+            evidence = json.loads(
+                (published / "classification" / "article_judgments.json").read_text()
+            )
+            report = (published / "report.html").read_text()
+
+        self.assertEqual(
+            [signal["canonical_title"] for signal in audit["qualified_signals"]],
+            ["Home espresso"],
+        )
+        self.assertEqual(audit["article_classifications"], evidence)
+        rejected = next(item for item in evidence if not item["accepted"])
+        self.assertEqual(rejected["decision_reason"], "routine_politics")
+        self.assertIn("Election result", rejected["prompt"])
+        self.assertTrue(rejected["attempts"][0]["validation_valid"])
+        self.assertEqual(
+            rejected["attempts"][0]["raw_output"]["rejection_class"],
+            "routine_politics",
+        )
+        decisions = {item["canonical_title"]: item for item in audit["decisions"]}
+        self.assertEqual(decisions["Home espresso"]["outcome"], "classified_signal")
+        self.assertEqual(
+            decisions["Election result"]["outcome"], "classification_rejected"
+        )
+        qualified_section = report.split("<h2>Rejected classifications</h2>", 1)[0]
+        self.assertIn("Home espresso", qualified_section)
+        self.assertNotIn("Election result", qualified_section)
+
     def test_schema_validation_failure_creates_no_output_root(self) -> None:
         invalid_attention = WikimediaAttentionResult(
             raw_candidate_titles=(),
@@ -182,6 +243,22 @@ class RunPublicationTest(unittest.TestCase):
                 )
 
             self.assertFalse(output_root.exists())
+
+
+def _qualified_article(page_id: int, title: str) -> CanonicalArticle:
+    daily_views = tuple(
+        DailyView(date=date(2026, 7, 1 + offset), views=10_000)
+        for offset in range(14)
+    )
+    return CanonicalArticle(
+        page_id=page_id,
+        canonical_title=title,
+        extract="Fixture lead.",
+        categories=("Consumer topics",),
+        previous_window_views=70_000,
+        current_window_views=140_000,
+        aliases=(AliasTraffic(title, 70_000, 140_000, daily_views),),
+    )
 
 
 if __name__ == "__main__":

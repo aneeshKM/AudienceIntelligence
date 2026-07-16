@@ -4,7 +4,7 @@
   "title": "Audience Trend Miner Audit",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "status", "degraded", "run", "decisions", "qualified_signals", "failures"],
+  "required": ["schema_version", "status", "degraded", "run", "decisions", "qualified_signals", "article_classifications", "failures"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "status": {"enum": ["success", "failed"]},
@@ -17,6 +17,10 @@
     "qualified_signals": {
       "type": "array",
       "items": {"$ref": "#/$defs/qualifiedSignal"}
+    },
+    "article_classifications": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/articleClassification"}
     },
     "failures": {
       "type": "array",
@@ -54,13 +58,21 @@
         "current_window_views": {"type": "integer", "minimum": 0},
         "trend_score": {"type": "number"},
         "gates": {"$ref": "#/$defs/qualificationGates"},
-        "outcome": {"enum": ["qualified_signal", "failed_qualification", "rejected_noise"]},
+        "outcome": {"enum": ["qualified_signal", "classified_signal", "classification_rejected", "failed_qualification", "rejected_noise"]},
         "reasons": {
           "type": "array",
           "minItems": 1,
           "items": {
             "enum": [
               "all_qualification_gates_passed",
+              "classification_accepted",
+              "classification_rejected:tragedy",
+              "classification_rejected:violent_crime",
+              "classification_rejected:death_driven",
+              "classification_rejected:routine_politics",
+              "classification_rejected:isolated_news",
+              "classification_rejected:no_consumer_audience",
+              "classification_rejected:exhausted_attempts",
               "minimum_traffic_failed",
               "growth_failed",
               "positive_score_failed",
@@ -102,6 +114,47 @@
         "previous_window_views": {"type": "integer", "minimum": 0},
         "current_window_views": {"type": "integer", "minimum": 0},
         "trend_score": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "classificationAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt", "raw_output", "validation_valid", "error"],
+      "properties": {
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 3},
+        "raw_output": {},
+        "validation_valid": {"type": "boolean"},
+        "error": {"type": ["string", "null"]}
+      }
+    },
+    "articleJudgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supports_consumer_audience", "brand_safe", "rejection_class", "rationale"],
+      "properties": {
+        "supports_consumer_audience": {"type": "boolean"},
+        "brand_safe": {"type": "boolean"},
+        "rejection_class": {"enum": ["accepted", "tragedy", "violent_crime", "death_driven", "routine_politics", "isolated_news", "no_consumer_audience"]},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "articleClassification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page_id", "canonical_title", "prompt", "accepted", "decision_reason", "judgment", "attempts"],
+      "properties": {
+        "page_id": {"type": "integer", "minimum": 1},
+        "canonical_title": {"type": "string", "minLength": 1},
+        "prompt": {"type": "string", "minLength": 1},
+        "accepted": {"type": "boolean"},
+        "decision_reason": {"enum": ["accepted", "tragedy", "violent_crime", "death_driven", "routine_politics", "isolated_news", "no_consumer_audience", "exhausted_attempts"]},
+        "judgment": {"oneOf": [{"$ref": "#/$defs/articleJudgment"}, {"type": "null"}]},
+        "attempts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {"$ref": "#/$defs/classificationAttempt"}
+        }
       }
     },
     "dailyView": {

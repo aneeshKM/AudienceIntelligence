@@ -9,6 +9,7 @@ import tempfile
 
 import jsonschema
 
+from audience_trend_miner.classification import ArticleClassificationResult
 from audience_trend_miner.trends import TrendDecision, TrendQualificationResult
 from audience_trend_miner.wikimedia import AnalysisWindows, WikimediaAttentionResult
 
@@ -25,6 +26,7 @@ class PublicationInput:
     windows: AnalysisWindows
     attention: WikimediaAttentionResult
     qualification: TrendQualificationResult
+    classification: ArticleClassificationResult
 
 
 def publish_run(publication: PublicationInput) -> Path:
@@ -75,12 +77,12 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         "degraded": False,
         "run": manifest,
         "decisions": [
-            _decision_audit_record(decision)
+            _decision_audit_record(decision, publication.classification)
             for decision in publication.qualification.decisions
         ],
-        "qualified_signals": [
-            _qualified_signal_record(decision)
-            for decision in publication.qualification.qualified
+        "qualified_signals": _accepted_signal_records(publication),
+        "article_classifications": [
+            decision.audit_data() for decision in publication.classification.decisions
         ],
         "failures": [],
     }
@@ -92,17 +94,32 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         "manifest.json": _json_text(manifest),
         "portfolio.json": _json_text(portfolio),
         "audit.json": _json_text(audit),
-        "report.html": _report(publication.qualification),
+        "report.html": _report(publication),
         "wikimedia/canonical_articles.json": _json_text(
             audit["canonical_articles"]
         ),
     }
+    if publication.classification.decisions:
+        artifacts["classification/article_judgments.json"] = _json_text(
+            audit["article_classifications"]
+        )
     for raw_artifact in publication.attention.raw_artifacts:
         relative_name = _raw_artifact_path(raw_artifact.name)
         if relative_name in artifacts:
             raise ValueError(f"duplicate run artifact path: {relative_name}")
         artifacts[relative_name] = _json_text(raw_artifact.payload)
     return artifacts
+
+
+def _accepted_signal_records(publication: PublicationInput) -> list[dict[str, object]]:
+    accepted_page_ids = {
+        decision.page_id for decision in publication.classification.accepted
+    }
+    return [
+        _qualified_signal_record(decision)
+        for decision in publication.qualification.qualified
+        if decision.article.page_id in accepted_page_ids
+    ]
 
 
 def _raw_artifact_path(name: str) -> str:
@@ -121,11 +138,28 @@ def _json_text(artifact: object) -> str:
     return json.dumps(artifact, indent=2) + "\n"
 
 
-def _decision_audit_record(decision: TrendDecision) -> dict[str, object]:
+def _decision_audit_record(
+    decision: TrendDecision,
+    classification: ArticleClassificationResult,
+) -> dict[str, object]:
+    classified = next(
+        (
+            item
+            for item in classification.decisions
+            if item.page_id == decision.article.page_id
+        ),
+        None,
+    )
     outcome = (
         "rejected_noise"
         if decision.exclusion_reason is not None
-        else "qualified_signal" if decision.included else "failed_qualification"
+        else "classified_signal"
+        if classified is not None and classified.accepted
+        else "classification_rejected"
+        if classified is not None
+        else "qualified_signal"
+        if decision.included
+        else "failed_qualification"
     )
     reasons = []
     if decision.exclusion_reason is not None:
@@ -136,8 +170,14 @@ def _decision_audit_record(decision: TrendDecision) -> dict[str, object]:
         reasons.append("growth_failed")
     if not decision.gates.positive_score:
         reasons.append("positive_score_failed")
-    if decision.included:
+    if decision.included and classified is None:
         reasons.append("all_qualification_gates_passed")
+    elif classified is not None:
+        reasons.append(
+            "classification_accepted"
+            if classified.accepted
+            else f"classification_rejected:{classified.decision_reason}"
+        )
     return {
         "page_id": decision.article.page_id,
         "canonical_title": decision.article.canonical_title,
@@ -166,13 +206,23 @@ def _qualified_signal_record(decision: TrendDecision) -> dict[str, object]:
     }
 
 
-def _report(qualification: TrendQualificationResult) -> str:
+def _report(publication: PublicationInput) -> str:
+    qualification = publication.qualification
+    accepted_page_ids = {
+        decision.page_id for decision in publication.classification.accepted
+    }
     qualified_items = "".join(
         f"<li><strong>{escape(decision.article.canonical_title)}</strong> — "
         f"{decision.article.current_window_views:,} current views; "
         f"trend score {decision.score:.2f}</li>"
         for decision in qualification.qualified
+        if decision.article.page_id in accepted_page_ids
     ) or "<li>No attention signals qualified for this run.</li>"
+    classification_rejections = "".join(
+        f"<li><strong>{escape(decision.canonical_title)}</strong> — "
+        f"{escape(decision.decision_reason)}</li>"
+        for decision in publication.classification.rejected
+    ) or "<li>No article classifications were rejected.</li>"
     noise_items = "".join(
         f"<li><strong>{escape(decision.article.canonical_title)}</strong> — "
         f"{escape(decision.exclusion_reason or '')}</li>"
@@ -199,6 +249,8 @@ def _report(qualification: TrendQualificationResult) -> str:
   <ul>{qualified_items}</ul>
   <h2>Rejected deterministic noise</h2>
   <ul>{noise_items}</ul>
+  <h2>Rejected classifications</h2>
+  <ul>{classification_rejections}</ul>
   <p>No emerging audiences qualified for this run.</p>
 </main></body>
 </html>

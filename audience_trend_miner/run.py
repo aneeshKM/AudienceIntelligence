@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from audience_trend_miner.classification import (
+    ArticleClassificationResult,
+    FixtureStructuredGenerator,
+    GroqStructuredGenerator,
+    StructuredGenerator,
+    classify_articles,
+)
 from audience_trend_miner.publication import PublicationInput, publish_run
 from audience_trend_miner.trends import qualify_trends
 from audience_trend_miner.wikimedia import (
@@ -35,6 +43,16 @@ def execute_run(as_of_argument: date | None, output_directory: Path) -> Path:
     if adapter is not None:
         attention = acquire_wikimedia_attention(windows, adapter)
     qualification = qualify_trends(attention.canonical_articles)
+    classification = ArticleClassificationResult((), (), ())
+    if qualification.qualified:
+        generator = _selected_structured_generator()
+        classification = classify_articles(
+            tuple(decision.article for decision in qualification.qualified),
+            generator,
+            sleep=(lambda _: None)
+            if isinstance(generator, FixtureStructuredGenerator)
+            else time.sleep,
+        )
 
     return publish_run(
         PublicationInput(
@@ -45,6 +63,7 @@ def execute_run(as_of_argument: date | None, output_directory: Path) -> Path:
             windows=windows,
             attention=attention,
             qualification=qualification,
+            classification=classification,
         )
     )
 
@@ -61,3 +80,10 @@ def _selected_wikimedia_adapter() -> WikimediaAdapter | None:
         if rest_base_url
         else HttpWikimediaAdapter()
     )
+
+
+def _selected_structured_generator() -> StructuredGenerator:
+    fixture_path = os.environ.get("AUDIENCE_TREND_MINER_CLASSIFICATION_FIXTURE")
+    if fixture_path:
+        return FixtureStructuredGenerator.from_file(Path(fixture_path))
+    return GroqStructuredGenerator()
