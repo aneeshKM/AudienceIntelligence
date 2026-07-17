@@ -15,7 +15,7 @@ const moduleTemplate = document.querySelector("#module-template");
 const eventTemplate = document.querySelector("#event-template");
 const cardTemplate = document.querySelector("#audience-card-template");
 
-let activeRunId = null;
+let activeRun = null;
 let lastSequence = 0;
 let socket = null;
 let streamWanted = false;
@@ -23,6 +23,22 @@ let followProgress = true;
 let lastScrollY = window.scrollY;
 let pollGeneration = 0;
 const modulePanels = new Map();
+const directions = [
+  {
+    contractValue: "robust_growth",
+    selector: "#growing-audiences",
+    label: "Growing",
+    icon: "↗",
+    className: "growing",
+  },
+  {
+    contractValue: "robust_shrinking",
+    selector: "#shrinking-audiences",
+    label: "Shrinking",
+    icon: "↘",
+    className: "shrinking",
+  },
+];
 
 const localToday = new Date();
 localToday.setMinutes(localToday.getMinutes() - localToday.getTimezoneOffset());
@@ -30,7 +46,7 @@ asOfInput.value = localToday.toISOString().slice(0, 10);
 runIdInput.value = `run-${asOfInput.value}`;
 
 asOfInput.addEventListener("change", () => {
-  if (!activeRunId || runIdInput.value === `run-${activeRunId.asOf}`) {
+  if (!activeRun || runIdInput.value === `run-${activeRun.asOf}`) {
     runIdInput.value = `run-${asOfInput.value}`;
   }
 });
@@ -61,7 +77,7 @@ form.addEventListener("submit", async (event) => {
 
   const runId = runIdInput.value;
   const asOf = asOfInput.value;
-  const isNewRun = activeRunId?.id !== runId;
+  const isNewRun = activeRun?.id !== runId;
   beginRun(runId, asOf, isNewRun);
 
   try {
@@ -90,7 +106,7 @@ form.addEventListener("submit", async (event) => {
 function beginRun(runId, asOf, clearExisting) {
   stopStreaming();
   pollGeneration += 1;
-  activeRunId = { id: runId, asOf };
+  activeRun = { id: runId, asOf };
   if (clearExisting) {
     lastSequence = 0;
     progressFeed.replaceChildren();
@@ -129,17 +145,19 @@ async function responseDetail(response) {
 function connectEventStream(runId) {
   streamWanted = true;
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(
+  const openedSocket = new WebSocket(
     `${protocol}://${window.location.host}/api/runs/${encodeURIComponent(runId)}/events?after_sequence=${lastSequence}`,
   );
-  socket.addEventListener("message", (message) => {
+  socket = openedSocket;
+  openedSocket.addEventListener("message", (message) => {
     const event = JSON.parse(message.data);
     lastSequence = Math.max(lastSequence, event.sequence);
     appendProgressEvent(event);
   });
-  socket.addEventListener("close", () => {
+  openedSocket.addEventListener("close", () => {
+    if (socket !== openedSocket) return;
     socket = null;
-    if (streamWanted && activeRunId?.id === runId) {
+    if (streamWanted && activeRun?.id === runId) {
       window.setTimeout(() => connectEventStream(runId), 700);
     }
   });
@@ -154,7 +172,7 @@ function stopStreaming() {
 }
 
 async function pollRun(runId, generation) {
-  while (activeRunId?.id === runId && generation === pollGeneration) {
+  while (activeRun?.id === runId && generation === pollGeneration) {
     try {
       const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
       if (!response.ok) throw new Error("Run status is temporarily unavailable.");
@@ -169,6 +187,13 @@ async function pollRun(runId, generation) {
       if (state.status === "failed") {
         stopStreaming();
         const message = state.failure?.message || "The run ended unsuccessfully.";
+        appendProgressEvent({
+          module: "run",
+          operation: "failed",
+          level: "error",
+          message,
+          timestamp: new Date().toISOString(),
+        });
         setStatus(`${runId} failed. ${message} Progress is retained for retry.`, true);
         finishControls(true);
         return;
@@ -183,10 +208,17 @@ async function pollRun(runId, generation) {
 function appendProgressEvent(event) {
   const panel = modulePanel(event.module);
   const item = eventTemplate.content.firstElementChild.cloneNode(true);
-  const level = event.level === "warning" || event.level === "error" ? event.level : "info";
-  const levelLabels = { info: "Update", warning: "Warning", error: "Error" };
-  item.classList.add(level);
-  item.querySelector(".event-level").textContent = levelLabels[level];
+  const eventLevel =
+    event.level === "warning" || event.level === "error" ? event.level : "info";
+  const presentation = event.operation === "retry" ? "retry" : eventLevel;
+  const levelLabels = {
+    info: "Update",
+    retry: "Retry",
+    warning: "Warning",
+    error: "Error",
+  };
+  item.classList.add(presentation);
+  item.querySelector(".event-level").textContent = levelLabels[presentation];
   item.querySelector(".event-operation").textContent = humanize(event.operation);
   item.querySelector(".event-message").textContent = event.message;
 
@@ -197,6 +229,7 @@ function appendProgressEvent(event) {
     ? "Time unavailable"
     : parsedTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
+  let moduleComplete = false;
   if (event.progress) {
     const progress = item.querySelector(".event-progress");
     const meter = progress.querySelector("progress");
@@ -211,13 +244,22 @@ function appendProgressEvent(event) {
       event.progress.current === event.progress.total
         ? `${event.progress.current} of ${event.progress.total} · Complete`
         : `${event.progress.current} of ${event.progress.total}`;
+    moduleComplete =
+      event.progress.current === event.progress.total &&
+      (event.operation === "publish" || event.operation === "resume");
   }
 
   panel.list.append(item);
   panel.count += 1;
+  panel.complete ||= moduleComplete;
+  panel.element.classList.toggle("complete", panel.complete);
   panel.element.querySelector(".module-count").textContent =
-    `${panel.count} ${panel.count === 1 ? "event" : "events"}`;
-  setStatus(`${humanize(event.module)}: ${levelLabels[level]} — ${event.message}`, level === "error");
+    `${panel.count} ${panel.count === 1 ? "event" : "events"}` +
+    (panel.complete ? " · Complete" : "");
+  setStatus(
+    `${humanize(event.module)}: ${levelLabels[presentation]} — ${event.message}`,
+    eventLevel === "error",
+  );
   if (followProgress) window.requestAnimationFrame(scrollToLatest);
 }
 
@@ -226,7 +268,12 @@ function modulePanel(module) {
   const element = moduleTemplate.content.firstElementChild.cloneNode(true);
   element.querySelector("h3").textContent = humanize(module);
   progressFeed.append(element);
-  const panel = { element, list: element.querySelector(".event-list"), count: 0 };
+  const panel = {
+    element,
+    list: element.querySelector(".event-list"),
+    count: 0,
+    complete: false,
+  };
   modulePanels.set(module, panel);
   return panel;
 }
@@ -263,28 +310,29 @@ function renderPortfolio(portfolio) {
     `Previous ${formatDate(previous.start)}–${formatDate(previous.end)} · ` +
     `Current ${formatDate(current.start)}–${formatDate(current.end)}`;
 
-  const growing = portfolio.audience_portfolio.filter(
-    (audience) => audience.direction === "robust_growth",
-  );
-  const shrinking = portfolio.audience_portfolio.filter(
-    (audience) => audience.direction === "robust_shrinking",
-  );
-  renderDirection("#growing-audiences", growing, "Growing", "↗");
-  renderDirection("#shrinking-audiences", shrinking, "Shrinking", "↘");
+  for (const direction of directions) {
+    renderDirection(
+      direction,
+      portfolio.audience_portfolio.filter(
+        (audience) => audience.direction === direction.contractValue,
+      ),
+    );
+  }
   emptyPortfolio.hidden = portfolio.audience_portfolio.length !== 0;
   portfolioSection.hidden = false;
   portfolioSection.scrollIntoView({ block: "start" });
 }
 
-function renderDirection(selector, audiences, label, icon) {
-  const section = document.querySelector(selector);
+function renderDirection(direction, audiences) {
+  const section = document.querySelector(direction.selector);
   const grid = section.querySelector(".card-grid");
   grid.replaceChildren();
   section.hidden = audiences.length === 0;
   for (const audience of audiences) {
     const card = cardTemplate.content.firstElementChild.cloneNode(true);
-    card.classList.add(label.toLowerCase());
-    card.querySelector(".direction-badge").textContent = `${icon} ${label}`;
+    card.classList.add(direction.className);
+    card.querySelector(".direction-badge").textContent =
+      `${direction.icon} ${direction.label}`;
     card.querySelector(".percentage-change").textContent = formatChange(
       audience.percentage_change,
     );

@@ -310,6 +310,11 @@ h1 {
   transform: rotate(45deg);
 }
 
+.event-item.retry .event-marker {
+  background: transparent;
+  border: 2px solid var(--amber);
+}
+
 .event-item.error .event-marker {
   background: var(--red);
   border-radius: 0;
@@ -335,6 +340,10 @@ h1 {
 }
 
 .warning .event-level {
+  color: var(--amber);
+}
+
+.retry .event-level {
   color: var(--amber);
 }
 
