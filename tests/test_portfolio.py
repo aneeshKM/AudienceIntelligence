@@ -14,12 +14,18 @@ from audience_trend_miner.refinement import (
     ClusterRefinementResult,
     ClusterSafetyAssessment,
     RefinementAttempt,
+    refine_candidate_clusters,
 )
 from audience_trend_miner.wikimedia import WikimediaAttentionResult
 from audience_trend_miner.trends import qualify_trends
 from tests.test_article_classification import ScriptedGenerator
 from tests.test_article_classification import judgment
-from tests.test_publication import _qualified_article, publication_input
+from tests.test_publication import (
+    _qualified_article,
+    publication_input,
+    refinement_audience,
+    refinement_decision,
+)
 
 
 def accepted(name: str, component_id: int, *page_ids: int) -> AcceptedAudience:
@@ -104,7 +110,29 @@ class PortfolioTransformationTest(unittest.TestCase):
 
     def test_publishes_the_same_audience_data_in_json_and_html(self) -> None:
         articles = (_qualified_article(1, "Trail shoes"), _qualified_article(2, "Trail running"))
-        refined = ClusterRefinementResult((accepted("Trail runners", 1, 1, 2),), (), ())
+        qualification = qualify_trends(articles)
+        classification = classify_articles(
+            articles, ScriptedGenerator(judgment(), judgment()), sleep=lambda _: None
+        )
+        clustering = form_candidate_clusters(
+            articles, FrozenEmbeddingAdapter(((1.0, 0.0), (1.0, 0.0)))
+        )
+        refined = refine_candidate_clusters(
+            clustering.components,
+            articles,
+            ScriptedGenerator(
+                refinement_decision(
+                    "validate",
+                    [refinement_audience("Trail runners", 1, 2)],
+                    [],
+                    alternative_matches=[],
+                ),
+                {"materially_centered_on_tragedy": False,
+                 "materially_centered_on_violent_crime": False,
+                 "rationale": "Safe frozen cluster."},
+            ),
+            sleep=lambda _: None,
+        )
         result = build_portfolio(
             refined,
             articles,
@@ -115,18 +143,15 @@ class PortfolioTransformationTest(unittest.TestCase):
             )),
             sleep=lambda _: None,
         )
-        qualification = qualify_trends(articles)
-        classification = classify_articles(
-            articles, ScriptedGenerator(judgment(), judgment()), sleep=lambda _: None
-        )
-        clustering = form_candidate_clusters(
-            articles, FrozenEmbeddingAdapter(((1.0, 0.0), (1.0, 0.0)))
-        )
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             published = publish_run(publication_input(
                 Path(temporary_directory),
-                attention=WikimediaAttentionResult((), articles, ()),
+                attention=WikimediaAttentionResult(
+                    tuple(article.aliases[0].raw_title for article in articles),
+                    articles,
+                    (),
+                ),
                 qualification=qualification,
                 classification=classification,
                 clustering=clustering,

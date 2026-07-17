@@ -121,6 +121,8 @@ def verify_publication_quality(
         item["source_component_id"]: item for item in audit["portfolio_calculations"]
     }
     audiences = portfolio["audiences"]
+    if audiences:
+        _verify_all_consumed_dispositions(audit, articles, classified, components)
     all_page_ids: list[int] = []
     traffic: list[int] = []
     for audience in audiences:
@@ -152,6 +154,58 @@ def verify_publication_quality(
         if audience["estimated_size_index"] != points / 100:
             raise ValueError(f"published Size Index is incorrect for component {audience['source_component_id']}")
     return PublicationQualityResult(tuple(sorted(all_page_ids)), sum(expected_points))
+
+
+def _verify_all_consumed_dispositions(
+    audit: dict[str, object],
+    articles: dict[int, dict[str, object]],
+    classified: set[int],
+    components: dict[int, set[int]],
+) -> None:
+    raw_titles = set(audit["raw_candidate_titles"])
+    alias_titles = {
+        alias["raw_title"]
+        for article in articles.values()
+        for alias in article["aliases"]
+    }
+    failed_titles = {
+        failure["subject"]
+        for failure in audit["failures"]
+        if failure["operation"] in {"pageviews", "metadata", "canonicalization"}
+    }
+    if raw_titles != alias_titles | failed_titles:
+        raise ValueError("raw candidate disposition lineage is incomplete")
+    decision_ids = {item["page_id"] for item in audit["decisions"]}
+    if decision_ids != set(articles):
+        raise ValueError("canonical qualification lineage is incomplete")
+    classification_ids = {item["page_id"] for item in audit["article_classifications"]}
+    qualified_for_classification = {
+        item["page_id"]
+        for item in audit["decisions"]
+        if item["outcome"] in {"classified_signal", "classification_rejected"}
+    }
+    if classification_ids != qualified_for_classification:
+        raise ValueError("classification filtering lineage is incomplete")
+    clustered_ids = set().union(*components.values()) if components else set()
+    if clustered_ids != classified:
+        raise ValueError("classification-to-clustering lineage is incomplete")
+    candidate_components = {
+        item["component_id"]
+        for item in audit["candidate_clustering"]["components"]
+        if item["is_candidate_cluster"]
+    }
+    refined_components = {
+        item["component_id"] for item in audit["cluster_refinement"]["decisions"]
+    }
+    if candidate_components != refined_components:
+        raise ValueError("cluster refinement disposition lineage is incomplete")
+    singleton_ids = {
+        next(iter(components[item["component_id"]]))
+        for item in audit["candidate_clustering"]["components"]
+        if not item["is_candidate_cluster"]
+    }
+    if singleton_ids != set(audit["cluster_refinement"]["rejected_standalone_page_ids"]):
+        raise ValueError("singleton disposition lineage is incomplete")
 
 
 def _independent_basis_points(traffic: list[int]) -> list[int]:

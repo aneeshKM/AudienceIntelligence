@@ -5,18 +5,19 @@
     {"page_id": 2, "commercially_relevant": true},
     {"page_id": 3, "commercially_relevant": true},
     {"page_id": 4, "commercially_relevant": true},
-    {"page_id": 5, "commercially_relevant": false},
-    {"page_id": 6, "commercially_relevant": false}
+    {"page_id": 5, "commercially_relevant": true},
+    {"page_id": 6, "commercially_relevant": true},
+    {"page_id": 7, "commercially_relevant": true},
+    {"page_id": 8, "commercially_relevant": true},
+    {"page_id": 9, "commercially_relevant": false},
+    {"page_id": 10, "commercially_relevant": false}
   ],
   "clusters": [
     {"component_id": 1, "name": "Home Espresso Explorers", "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
     {"component_id": 2, "name": "Recreational Trail Runners", "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
     {"component_id": 3, "name": "Compact Garden Growers", "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
     {"component_id": 4, "name": "Indie Beauty Shoppers", "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
-    {"component_id": 5, "name": "Weekend Bread Bakers", "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
-    {"component_id": 6, "name": "Unrelated News Chain", "has_unrelated_member": true, "tragedy": false, "violent_crime": false},
-    {"component_id": 7, "name": "Disaster Coverage", "has_unrelated_member": false, "tragedy": true, "violent_crime": false},
-    {"component_id": 8, "name": "Violent Crime Coverage", "has_unrelated_member": false, "tragedy": false, "violent_crime": true}
+    {"component_id": 5, "name": "Weekend Bread Bakers", "has_unrelated_member": false, "tragedy": false, "violent_crime": false}
   ],
   "top_audience_editor_reviews": [
     {"rank": 1, "audience_name": "Home Espresso Explorers", "reviewer": "V1 editor", "reviewed_at": "2026-07-16", "coherent": true, "name_useful": true, "brand_useful": true},

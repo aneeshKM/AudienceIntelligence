@@ -165,7 +165,7 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         "manifest.json": _json_text(manifest),
         "portfolio.json": _portfolio_json_text(portfolio),
         "audit.json": _json_text(audit),
-        "report.html": _report(publication),
+        "report.html": _report(publication, failures),
         "wikimedia/canonical_articles.json": _json_text(
             audit["canonical_articles"]
         ),
@@ -441,8 +441,9 @@ def _qualified_signal_record(decision: TrendDecision) -> dict[str, object]:
     }
 
 
-def _report(publication: PublicationInput) -> str:
-    failures = _run_failure_records(publication)
+def _report(
+    publication: PublicationInput, failures: list[dict[str, object]]
+) -> str:
     degraded_notice = (
         '<section class="notice"><h2>This run is degraded</h2><p>'
         f"{len(failures)} item-level failure(s) occurred; unaffected items completed.</p><ul>"
