@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "stage", "status", "payload"],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "stage": {"type": "string", "minLength": 1},
+    "status": {"const": "complete"},
+    "payload": {"type": "object"}
+  }
+}
