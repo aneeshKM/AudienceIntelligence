@@ -524,6 +524,66 @@ class RunPublicationStageTest(unittest.TestCase):
                 self.assertIn("inconsistent", completed.stderr)
                 self.assertFalse((run_directory / "publication").exists())
 
+    def test_rejects_cross_stage_value_contradictions(self) -> None:
+        scenarios = (
+            "formation-member",
+            "final-member",
+            "traffic-members",
+            "traffic-values",
+        )
+        for scenario in scenarios:
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                _publish_completed_upstream(root)
+                run_directory = root / "publication-run"
+                formation_path = run_directory / "semantic-audience-formation.json"
+                adjudication_path = run_directory / "cluster-adjudication.json"
+                trend_path = run_directory / "trend-portfolio.json"
+                formation = json.loads(formation_path.read_text(encoding="utf-8"))
+                adjudication = json.loads(
+                    adjudication_path.read_text(encoding="utf-8")
+                )
+                trend = json.loads(trend_path.read_text(encoding="utf-8"))
+                if scenario == "formation-member":
+                    formation["payload"]["preliminary_clusters"][0]["members"][0][
+                        "canonical_title"
+                    ] = "Contradictory formation title"
+                    formation_path.write_text(json.dumps(formation), encoding="utf-8")
+                    adjudication["payload"]["configuration"][
+                        "semantic_audience_formation_fingerprint"
+                    ] = canonical_json_fingerprint(formation)
+                    adjudication_path.write_text(
+                        json.dumps(adjudication), encoding="utf-8"
+                    )
+                    trend["payload"]["configuration"][
+                        "cluster_adjudication_fingerprint"
+                    ] = canonical_json_fingerprint(adjudication)
+                elif scenario == "final-member":
+                    adjudication["payload"]["final_audience_clusters"][0]["members"][
+                        0
+                    ]["canonical_title"] = "Contradictory final title"
+                    adjudication_path.write_text(
+                        json.dumps(adjudication), encoding="utf-8"
+                    )
+                    trend["payload"]["configuration"][
+                        "cluster_adjudication_fingerprint"
+                    ] = canonical_json_fingerprint(adjudication)
+                elif scenario == "traffic-members":
+                    trend["payload"]["audit_cluster_traffic"][0][
+                        "member_page_ids"
+                    ] = [1, 999]
+                else:
+                    trend["payload"]["audit_cluster_traffic"][0]["previous"][
+                        "observed_total"
+                    ] += 1
+                trend_path.write_text(json.dumps(trend), encoding="utf-8")
+
+                completed = _run_publication(root)
+
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn("inconsistent", completed.stderr)
+                self.assertFalse((run_directory / "publication").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

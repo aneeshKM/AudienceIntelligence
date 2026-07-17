@@ -215,11 +215,12 @@ def _validate_upstream(artifacts: dict[str, dict[str, object]]) -> None:
     if trend_payload["run_facts"] != expected_run_facts:
         raise V2ContractError("upstream artifacts contain mismatched run facts")
     _validate_counts_and_membership(
-        formation_payload, adjudication_payload, trend_payload
+        evidence_payload, formation_payload, adjudication_payload, trend_payload
     )
 
 
 def _validate_counts_and_membership(
+    evidence: dict[str, object],
     formation: dict[str, object],
     adjudication: dict[str, object],
     trend: dict[str, object],
@@ -317,6 +318,92 @@ def _validate_counts_and_membership(
             != source["source_preliminary_cluster_id"]
         ):
             raise V2ContractError("Trend Portfolio provenance is inconsistent")
+    _validate_cross_stage_values(
+        evidence,
+        preliminary,
+        final_clusters,
+        portfolio,
+        narratives,
+        traffic,
+    )
+
+
+def _validate_cross_stage_values(
+    evidence: dict[str, object],
+    preliminary: list[dict[str, object]],
+    final_clusters: list[dict[str, object]],
+    portfolio: list[dict[str, object]],
+    narratives: list[dict[str, object]],
+    traffic: list[dict[str, object]],
+) -> None:
+    canonical_pages = {
+        page["page_id"]: page
+        for page in _list_of_mappings(evidence["canonical_pages"])
+    }
+    preliminary_members: dict[object, dict[str, object]] = {}
+    for cluster in preliminary:
+        for member in _list_of_mappings(cluster["members"]):
+            source = canonical_pages.get(member["page_id"])
+            if (
+                member["page_id"] in preliminary_members
+                or source is None
+                or member["canonical_title"] != source["canonical_title"]
+                or member["lead"] != source["lead"]
+                or not set(cast(list[str], member["selected_categories"])).issubset(
+                    set(cast(list[str], source["categories"]))
+                )
+            ):
+                raise V2ContractError(
+                    "Semantic Audience Formation evidence is inconsistent"
+                )
+            preliminary_members[member["page_id"]] = member
+
+    final_by_id: dict[object, dict[str, object]] = {}
+    for cluster in final_clusters:
+        final_by_id[cluster["cluster_id"]] = cluster
+        for member in _list_of_mappings(cluster["members"]):
+            if member != preliminary_members.get(member["page_id"]):
+                raise V2ContractError(
+                    "Cluster Adjudication member evidence is inconsistent"
+                )
+
+    traffic_by_id = {record["cluster_id"]: record for record in traffic}
+    for cluster_id, cluster in final_by_id.items():
+        record = traffic_by_id[cluster_id]
+        member_ids = [
+            member["page_id"] for member in _list_of_mappings(cluster["members"])
+        ]
+        if (
+            record["source_preliminary_cluster_id"]
+            != cluster["source_preliminary_cluster_id"]
+            or record["name"] != cluster["name"]
+            or record["rationale"] != cluster["rationale"]
+            or record["member_page_ids"] != member_ids
+        ):
+            raise V2ContractError("Trend Portfolio traffic evidence is inconsistent")
+
+    narrative_by_id = {record["cluster_id"]: record for record in narratives}
+    for item in portfolio:
+        cluster_id = item["cluster_id"]
+        record = traffic_by_id[cluster_id]
+        cluster = final_by_id[cluster_id]
+        expected_traffic = {
+            "previous": record["previous"],
+            "current": record["current"],
+        }
+        expected_model_input = {
+            "source_cluster_name": cluster["name"],
+            "source_cluster_rationale": cluster["rationale"],
+            "members": cluster["members"],
+            "direction": record["direction"],
+        }
+        if (
+            item["traffic"] != expected_traffic
+            or item["direction"] != record["direction"]
+            or _mapping(narrative_by_id[cluster_id]["model_input"])
+            != expected_model_input
+        ):
+            raise V2ContractError("Trend Portfolio product facts are inconsistent")
 
 
 def _assemble_products(
