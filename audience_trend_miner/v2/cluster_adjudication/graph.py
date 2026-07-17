@@ -159,6 +159,8 @@ def execute_cluster_adjudication(
         for attempt_number in range(1, 4):
             try:
                 output = adapter.invoke(request)
+            except V2ContractError:
+                raise
             except Exception as error:
                 attempts.append(
                     ProviderAttempt(

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from audience_trend_miner import __main__ as cli
 from audience_trend_miner.v2.ui import create_app, serve
 
 
@@ -111,6 +112,17 @@ def _write_completed_publication(
 
 
 class RunServerTest(unittest.TestCase):
+    def test_ui_launch_loads_dotenv_without_overriding_exported_values(self) -> None:
+        with (
+            patch.object(cli, "load_dotenv") as load_dotenv,
+            patch.object(cli, "_v2_ui_main", return_value=0) as ui_main,
+            patch.object(sys, "argv", ["audience-trend-miner", "v2-ui"]),
+        ):
+            self.assertEqual(cli.main(), 0)
+
+        load_dotenv.assert_called_once_with(override=False)
+        ui_main.assert_called_once_with([])
+
     def test_primary_page_exposes_one_semantic_installer_interface(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = create_app(output_root=Path(temporary_directory) / "runs")
@@ -122,6 +134,8 @@ class RunServerTest(unittest.TestCase):
             self.assertTrue(response.headers["content-type"].startswith("text/html"))
             self.assertIn("<main", response.text)
             self.assertIn('id="run-form"', response.text)
+            self.assertIn('id="new-run"', response.text)
+            self.assertNotIn('id="run-id"', response.text)
             self.assertIn('id="run-status"', response.text)
             self.assertIn('aria-live="polite"', response.text)
             self.assertIn('src="/assets/app.js"', response.text)

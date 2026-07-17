@@ -15,6 +15,35 @@ FIXTURES = Path(__file__).with_name("fixtures")
 
 
 class ClusterAdjudicationGraphTest(unittest.TestCase):
+    def test_deterministic_adapter_failure_terminates_without_retrying(self) -> None:
+        class InvalidAdapter:
+            model = "invalid/cluster-model"
+
+            def __init__(self) -> None:
+                self.attempts = 0
+
+            def invoke(self, request: object) -> object:
+                del request
+                self.attempts += 1
+                raise V2ContractError("structured output configuration is invalid")
+
+        adapter = InvalidAdapter()
+
+        with self.assertRaisesRegex(
+            V2ContractError, "structured output configuration is invalid"
+        ):
+            execute_cluster_adjudication(
+                {
+                    "members": [
+                        page(101, "Air purifier"),
+                        page(102, "HEPA"),
+                    ]
+                },
+                adapter,
+            )
+
+        self.assertEqual(adapter.attempts, 1)
+
     def test_approved_proposal_skips_revision_with_role_specific_prompts(self) -> None:
         members = [page(101, "Air purifier"), page(102, "HEPA")]
         adapter = FrozenAdjudicationAdapter(

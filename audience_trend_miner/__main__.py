@@ -8,8 +8,11 @@ from pathlib import Path
 import sys
 from typing import Callable
 
+from dotenv import load_dotenv
+
 
 def main() -> int:
+    load_dotenv(override=False)
     if len(sys.argv) > 1 and sys.argv[1] == "v2-ui":
         return _v2_ui_main(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "v2-run":

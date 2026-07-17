@@ -1,9 +1,9 @@
 "use strict";
 
 const form = document.querySelector("#run-form");
-const runIdInput = document.querySelector("#run-id");
 const asOfInput = document.querySelector("#as-of");
 const startButton = document.querySelector("#start-run");
+const newRunButton = document.querySelector("#new-run");
 const runStatus = document.querySelector("#run-status");
 const progressSection = document.querySelector("#progress");
 const progressFeed = document.querySelector("#progress-feed");
@@ -21,7 +21,7 @@ let lastSequence = 0;
 let socket = null;
 let streamWanted = false;
 let followProgress = true;
-let lastScrollY = window.scrollY;
+let lastProgressScrollTop = 0;
 let pollGeneration = 0;
 const modulePanels = new Map();
 const directions = [
@@ -44,25 +44,18 @@ const directions = [
 const localToday = new Date();
 localToday.setMinutes(localToday.getMinutes() - localToday.getTimezoneOffset());
 asOfInput.value = localToday.toISOString().slice(0, 10);
-runIdInput.value = `run-${asOfInput.value}`;
 
-asOfInput.addEventListener("change", () => {
-  if (!activeRun || runIdInput.value === `run-${activeRun.asOf}`) {
-    runIdInput.value = `run-${asOfInput.value}`;
-  }
-});
-
-window.addEventListener(
+progressFeed.addEventListener(
   "scroll",
   () => {
     const distanceFromBottom =
-      document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
-    if (distanceFromBottom < 80) {
+      progressFeed.scrollHeight - progressFeed.clientHeight - progressFeed.scrollTop;
+    if (distanceFromBottom < 40) {
       setFollowing(true);
-    } else if (window.scrollY < lastScrollY - 4) {
+    } else if (progressFeed.scrollTop < lastProgressScrollTop - 4) {
       setFollowing(false);
     }
-    lastScrollY = window.scrollY;
+    lastProgressScrollTop = progressFeed.scrollTop;
   },
   { passive: true },
 );
@@ -70,6 +63,23 @@ window.addEventListener(
 followButton.addEventListener("click", () => {
   setFollowing(true);
   scrollToLatest();
+});
+
+newRunButton.addEventListener("click", () => {
+  stopStreaming();
+  pollGeneration += 1;
+  activeRun = null;
+  lastSequence = 0;
+  lastProgressScrollTop = 0;
+  progressFeed.replaceChildren();
+  modulePanels.clear();
+  progressSection.hidden = true;
+  portfolioSection.hidden = true;
+  newRunButton.hidden = true;
+  asOfInput.value = "";
+  startButton.querySelector("span").textContent = "Start new run";
+  setStatus("Choose an As-of Date for the new run.");
+  asOfInput.focus();
 });
 
 cancelButton.addEventListener("click", async () => {
@@ -105,8 +115,8 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!form.reportValidity()) return;
 
-  const runId = runIdInput.value;
   const asOf = asOfInput.value;
+  const runId = runIdForDate(asOf);
   const isNewRun = activeRun?.id !== runId;
   beginRun(runId, asOf, isNewRun);
 
@@ -145,6 +155,7 @@ function beginRun(runId, asOf, clearExisting) {
   portfolioSection.hidden = true;
   progressSection.hidden = false;
   startButton.disabled = true;
+  newRunButton.hidden = true;
   cancelButton.disabled = false;
   cancelButton.hidden = false;
   startButton.querySelector("span").textContent = "Run in progress";
@@ -154,6 +165,7 @@ function beginRun(runId, asOf, clearExisting) {
 
 function finishControls(retry) {
   startButton.disabled = false;
+  newRunButton.hidden = false;
   cancelButton.hidden = true;
   cancelButton.disabled = false;
   startButton.querySelector("span").textContent = retry
@@ -331,8 +343,12 @@ function setFollowing(value) {
 }
 
 function scrollToLatest() {
-  const latest = progressFeed.lastElementChild;
-  if (latest) latest.scrollIntoView({ block: "end" });
+  progressFeed.scrollTop = progressFeed.scrollHeight;
+  lastProgressScrollTop = progressFeed.scrollTop;
+}
+
+function runIdForDate(asOf) {
+  return `run-${asOf}`;
 }
 
 async function loadPortfolio(runId) {

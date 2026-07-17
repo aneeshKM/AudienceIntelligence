@@ -9,12 +9,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from audience_trend_miner.v2.cluster_adjudication.graph import (
     AdjudicationRequest,
 )
+from audience_trend_miner.v2.shared import V2ContractError
 
 
 DEFAULT_CLUSTER_MODEL = "openai/gpt-oss-20b"
 
 
 DECISION_SCHEMA: dict[str, object] = {
+    "title": "ClusterDecision",
     "type": "object",
     "additionalProperties": False,
     "required": ["groups", "rejected"],
@@ -48,6 +50,7 @@ DECISION_SCHEMA: dict[str, object] = {
 }
 
 CRITIQUE_SCHEMA: dict[str, object] = {
+    "title": "ClusterCritique",
     "type": "object",
     "additionalProperties": False,
     "required": ["approved", "challenges"],
@@ -97,6 +100,11 @@ class LangChainGroqAdjudicationAdapter:
 
     def invoke(self, request: AdjudicationRequest) -> object:
         schema = CRITIQUE_SCHEMA if request.role == "critic" else DECISION_SCHEMA
+        method = (
+            "json_schema"
+            if self.model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}
+            else "function_calling"
+        )
         model_input = {
             "members": list(request.members),
             "proposal": request.proposal,
@@ -114,11 +122,17 @@ class LangChainGroqAdjudicationAdapter:
                 )
             ),
         ]
-        response = self._chat_model.with_structured_output(
-            schema,
-            method="json_schema",
-            include_raw=True,
-        ).invoke(messages)
+        try:
+            structured_model = self._chat_model.with_structured_output(
+                schema,
+                method=method,
+                include_raw=True,
+            )
+        except ValueError as error:
+            raise V2ContractError(
+                "Groq structured output configuration is invalid"
+            ) from error
+        response = structured_model.invoke(messages)
         if not isinstance(response, dict):
             return response
         if response.get("parsing_error") is None:

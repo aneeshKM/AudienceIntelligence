@@ -65,8 +65,9 @@ Start the loopback FastAPI server (default `http://127.0.0.1:8000`):
 audience-trend-miner v2-ui --output-dir runs
 ```
 
-The browser starts or resumes the default global CLI with a stable run ID. The
-backend owns the subprocess independently of the browser connection, records
+Choose only an As-of Date in the browser. The UI derives the stable run ID as
+`run-<YYYY-MM-DD>` and starts or resumes the default global CLI. The backend
+owns the subprocess independently of the browser connection, records
 validated progress before delivery, and replays only missing event sequences
 after reconnect. A confirmed cancellation terminates only that run's owned
 subprocess and retains artifacts and event history. Failed or cancelled runs can

@@ -67,6 +67,7 @@ class BrowserWorkflowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             output_root = root / "runs"
+            run_id = "run-2026-07-17"
             wrapper = root / "interrupt_once.py"
             wrapper.write_text(
                 "import json, pathlib, subprocess, sys, time\n"
@@ -116,13 +117,12 @@ class BrowserWorkflowTest(unittest.TestCase):
                 page = browser.new_page()
                 page.goto(base_url)
                 page.get_by_label("As-of Date").fill("2026-07-17")
-                page.get_by_label("Run ID").fill("browser-resume")
                 page.get_by_label("As-of Date").press("Enter")
                 page.locator(".event-item").first.wait_for()
                 last_sequence_before_disconnect = page.evaluate("lastSequence")
                 page.evaluate("streamWanted = false; socket.close()")
                 page.wait_for_function("socket === null")
-                history_path = output_root / "browser-resume" / "ui-events.jsonl"
+                history_path = output_root / run_id / "ui-events.jsonl"
                 deadline = time.monotonic() + 5
                 gap_event = None
                 while time.monotonic() < deadline:
@@ -181,14 +181,33 @@ class BrowserWorkflowTest(unittest.TestCase):
                     }.issubset(set(modules)),
                     modules,
                 )
+                progress_metrics = page.locator("#progress-feed").evaluate(
+                    """element => ({
+                        overflowY: getComputedStyle(element).overflowY,
+                        clientHeight: element.clientHeight,
+                        scrollHeight: element.scrollHeight,
+                    })"""
+                )
+                self.assertEqual(progress_metrics["overflowY"], "auto")
+                self.assertGreater(
+                    progress_metrics["scrollHeight"], progress_metrics["clientHeight"]
+                )
                 self.assertTrue(page.locator("#portfolio").is_visible())
                 self.assertTrue(page.get_by_text("Evidence limitation").is_visible())
+                page.get_by_role("button", name="New run", exact=True).click()
+                self.assertEqual(page.get_by_label("As-of Date").input_value(), "")
+                self.assertFalse(page.locator("#progress").is_visible())
+                self.assertFalse(page.locator("#portfolio").is_visible())
+                self.assertEqual(
+                    page.get_by_role("status").text_content(),
+                    "Choose an As-of Date for the new run.",
+                )
                 browser.close()
 
             history = [
                 json.loads(line)
                 for line in (
-                    output_root / "browser-resume" / "ui-events.jsonl"
+                    output_root / run_id / "ui-events.jsonl"
                 ).read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(
@@ -196,7 +215,7 @@ class BrowserWorkflowTest(unittest.TestCase):
                 list(range(1, len(history) + 1)),
             )
             self.assertEqual(
-                (output_root / "browser-resume" / "fixture-attempt.txt").read_text(),
+                (output_root / run_id / "fixture-attempt.txt").read_text(),
                 "2",
             )
 
@@ -238,7 +257,7 @@ class BrowserWorkflowTest(unittest.TestCase):
             output_root = root / "runs"
             _write_completed_publication(
                 output_root,
-                "mixed-run",
+                "run-2026-07-17",
                 audiences=[
                     audience("growing", "robust_growth", 25.0),
                     audience("shrinking", "robust_shrinking", -20.0),
@@ -256,7 +275,6 @@ class BrowserWorkflowTest(unittest.TestCase):
                 page = browser.new_page()
                 page.goto(base_url)
                 page.get_by_label("As-of Date").fill("2026-07-17")
-                page.get_by_label("Run ID").fill("mixed-run")
                 page.get_by_role("button", name="Start or resume run").click()
                 page.get_by_text("↗ Growing", exact=True).wait_for(timeout=10_000)
                 self.assertTrue(page.get_by_text("↘ Shrinking", exact=True).is_visible())
@@ -269,6 +287,7 @@ class BrowserWorkflowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             output_root = root / "runs"
+            run_id = "run-2026-07-17"
             cancellable_cli = root / "cancellable_cli.py"
             cancellable_cli.write_text(
                 "import pathlib, sys, time\n"
@@ -290,11 +309,10 @@ class BrowserWorkflowTest(unittest.TestCase):
                 page = browser.new_page()
                 page.goto(base_url)
                 page.get_by_label("As-of Date").fill("2026-07-17")
-                page.get_by_label("Run ID").fill("browser-cancel")
                 page.get_by_role("button", name="Start or resume run").click()
                 cancel = page.get_by_role("button", name="Cancel run")
                 cancel.wait_for()
-                artifact = output_root / "browser-cancel" / "completed-module.json"
+                artifact = output_root / run_id / "completed-module.json"
                 deadline = time.monotonic() + 5
                 while not artifact.is_file() and time.monotonic() < deadline:
                     time.sleep(0.01)

@@ -7,6 +7,7 @@ from audience_trend_miner.v2.cluster_adjudication import AdjudicationRequest
 from audience_trend_miner.v2.cluster_adjudication.adapters import (
     LangChainGroqAdjudicationAdapter,
 )
+from audience_trend_miner.v2.shared import V2ContractError
 
 
 class _FakeStructuredRunnable:
@@ -31,7 +32,60 @@ class _FakeChatModel:
         return self.runnable
 
 
+class _InvalidStructuredChatModel:
+    def with_structured_output(self, schema: object, **options: object) -> object:
+        del schema, options
+        raise ValueError("unsupported structured output schema")
+
+
 class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
+    def test_invalid_provider_contract_is_a_fatal_configuration_error(self) -> None:
+        adapter = LangChainGroqAdjudicationAdapter(
+            model="openai/gpt-oss-20b",
+            chat_model=_InvalidStructuredChatModel(),
+        )
+
+        with self.assertRaisesRegex(
+            V2ContractError, "Groq structured output configuration is invalid"
+        ):
+            adapter.invoke(
+                AdjudicationRequest(
+                    role="proposer",
+                    prompt="proposer prompt",
+                    members=(),
+                )
+            )
+
+    def test_adapter_selects_supported_structured_output_contract_by_model(self) -> None:
+        scenarios = (
+            ("openai/gpt-oss-20b", "json_schema"),
+            ("qwen/qwen3.6-27b", "function_calling"),
+        )
+
+        for model, expected_method in scenarios:
+            with self.subTest(model=model):
+                chat_model = _FakeChatModel(
+                    {
+                        "raw": object(),
+                        "parsed": {"groups": [], "rejected": []},
+                        "parsing_error": None,
+                    }
+                )
+                adapter = LangChainGroqAdjudicationAdapter(
+                    model=model, chat_model=chat_model
+                )
+
+                adapter.invoke(
+                    AdjudicationRequest(
+                        role="proposer",
+                        prompt="proposer prompt",
+                        members=(),
+                    )
+                )
+
+                self.assertEqual(chat_model.schema["title"], "ClusterDecision")
+                self.assertEqual(chat_model.options["method"], expected_method)
+
     def test_adapter_requests_provider_schema_without_exposing_disallowed_evidence(self) -> None:
         parsed = {
             "groups": [
@@ -67,7 +121,7 @@ class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
         self.assertEqual(result, parsed)
         self.assertEqual(
             chat_model.options,
-            {"method": "json_schema", "include_raw": True},
+            {"method": "function_calling", "include_raw": True},
         )
         messages = chat_model.runnable.messages
         self.assertIsInstance(messages, list)

@@ -20,31 +20,24 @@
         <p class="eyebrow">Audience Trend Miner · V2</p>
         <h1 id="page-title">From public attention<br>to an audience portfolio.</h1>
         <p class="hero-copy">
-          Choose a stable run identifier and an As-of Date. This page will stay
-          with the run from evidence collection through final results.
+          Choose an As-of Date. This page will stay with the run from evidence
+          collection through final results.
         </p>
 
         <form id="run-form" class="run-form">
           <div class="field">
-            <label for="run-id">Run ID</label>
-            <span class="field-hint" id="run-id-hint">Reuse an ID to retry or resume.</span>
-            <input
-              id="run-id"
-              name="run_id"
-              pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
-              aria-describedby="run-id-hint"
-              autocomplete="off"
-              required
-            >
-          </div>
-          <div class="field">
             <label for="as-of">As-of Date</label>
-            <span class="field-hint" id="as-of-hint">Anchors both seven-day windows.</span>
+            <span class="field-hint" id="as-of-hint">
+              Anchors both seven-day windows and identifies the resumable run.
+            </span>
             <input id="as-of" name="as_of" type="date" aria-describedby="as-of-hint" required>
           </div>
           <button id="start-run" class="primary-action" type="submit">
             <span>Start or resume run</span>
             <span aria-hidden="true">→</span>
+          </button>
+          <button id="new-run" class="secondary-action" type="button" hidden>
+            New run
           </button>
         </form>
         <p id="run-status" class="run-status" role="status" aria-live="polite" aria-atomic="true">

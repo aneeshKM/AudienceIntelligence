@@ -149,7 +149,7 @@ h1 {
   box-shadow: var(--shadow);
   display: grid;
   gap: 1rem;
-  grid-template-columns: minmax(13rem, 1.3fr) minmax(12rem, 0.8fr) auto;
+  grid-template-columns: minmax(12rem, 1fr) auto auto;
   padding: 1.25rem;
 }
 
@@ -179,6 +179,7 @@ h1 {
 }
 
 .primary-action,
+.secondary-action,
 .quiet-action,
 .danger-action {
   border: 1px solid var(--ink);
@@ -204,6 +205,18 @@ h1 {
 .primary-action:disabled {
   cursor: wait;
   opacity: 0.62;
+}
+
+.secondary-action {
+  background: transparent;
+  border-color: var(--ink);
+  color: var(--ink);
+  font-weight: 750;
+}
+
+.secondary-action:hover {
+  background: var(--ink);
+  color: var(--surface);
 }
 
 .run-status {
@@ -289,6 +302,11 @@ h1 {
 .progress-feed {
   display: grid;
   gap: 1rem;
+  max-height: min(70vh, 48rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.35rem;
+  scrollbar-gutter: stable;
 }
 
 .module-panel {
