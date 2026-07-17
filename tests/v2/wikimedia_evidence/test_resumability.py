@@ -128,6 +128,29 @@ class EvidenceJobStoreTest(unittest.TestCase):
             self.assertEqual(payload["canonical_pages"][0]["lead"], "Lead")
             self.assertEqual(payload["canonical_pages"][0]["categories"], ["Visible"])
 
+    def test_stage_merges_partial_alias_metadata_and_skips_a_failed_batch(self) -> None:
+        adapter = PartialMetadataAdapter()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact_path = execute_wikimedia_evidence(
+                run_id="partial-metadata-stage",
+                as_of_date=date(2026, 7, 17),
+                output_root=Path(temporary_directory),
+                adapter=adapter,
+                store=self.store,
+                progress_sink=lambda event: None,
+                workers=2,
+            )
+
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))["payload"]
+            shared_page = next(
+                page for page in payload["canonical_pages"] if page["page_id"] == 42
+            )
+
+            self.assertEqual(shared_page["aliases"], ["A000", "Z000"])
+            self.assertEqual(shared_page["categories"], ["Visible"])
+            self.assertEqual(payload["exclusions"]["metadata_pages_unavailable"], 50)
+            self.assertEqual(adapter.failed_batch_attempts, 3)
+
 
 class CountryAdapter:
     def __init__(self, unavailable: set[str] | None = None) -> None:
@@ -162,6 +185,52 @@ class ProductionCountryAdapter(CountryAdapter):
             {title: 42 for title in titles},
             (),
         )
+
+
+class PartialMetadataAdapter(CountryAdapter):
+    def __init__(self) -> None:
+        super().__init__(unavailable=set())
+        self.failed_batch_attempts = 0
+        self.titles = tuple(
+            [f"A{index:03d}" for index in range(50)]
+            + [f"B{index:03d}" for index in range(50)]
+            + ["Z000"]
+        )
+
+    def daily_country_top_pages(self, day: date) -> CountryTopPagesResponse:
+        self.calls += 1
+        return CountryTopPagesResponse(
+            tuple(
+                CountryPageviewRecord("en.wikipedia", title, index + 1)
+                for index, title in enumerate(self.titles)
+            ),
+            {"day": day.isoformat()},
+        )
+
+    def metadata_batch(self, titles: tuple[str, ...]) -> MetadataBatchResponse:
+        self.calls += 1
+        if titles[0].startswith("B"):
+            self.failed_batch_attempts += 1
+            raise WikimediaTransientError(
+                "invalid metadata batch response", retry_immediately=True
+            )
+        pages = []
+        aliases = {}
+        for index, title in enumerate(titles):
+            page_id = 42 if title in {"A000", "Z000"} else 1000 + index
+            canonical_title = "Canonical Page" if page_id == 42 else title
+            categories = ("Visible",) if title == "Z000" else ()
+            pages.append(
+                MetadataResponse(
+                    page_id,
+                    canonical_title,
+                    "Lead",
+                    categories,
+                    {},
+                )
+            )
+            aliases[title] = page_id
+        return MetadataBatchResponse(tuple(pages), aliases, ())
 
 
 if __name__ == "__main__":

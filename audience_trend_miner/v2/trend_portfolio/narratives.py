@@ -17,6 +17,9 @@ MAX_NARRATIVE_ATTEMPTS = 3
 SUMMARY_TEMPLATE = (
     "Attention to {name} topics {direction_word} in the supplied comparison."
 )
+SUDDEN_SUMMARY_TEMPLATE = (
+    "Attention to {name} topics was suddenly trending in the supplied comparison."
+)
 COMMERCIAL_INTERPRETATION_TEMPLATE = (
     "{category_text} brands may find the supplied topic group commercially relevant."
 )
@@ -24,7 +27,7 @@ BUYING_POWER_RATIONALE_TEMPLATE = (
     "The {rating} rating is a qualitative assessment based on the supplied "
     "topics' relevance to {category_text}."
 )
-NARRATIVE_PROMPT = f"""You write bounded commercial copy for one selected audience trend. Use only the supplied evidence and return exactly the six requested fields. Copy source_cluster_name exactly as name. For summary use exactly: '{SUMMARY_TEMPLATE}' Choose only schema-listed brand categories and a buying-power rating. For commercial_interpretation use exactly: '{COMMERCIAL_INTERPRETATION_TEMPLATE}' For buying_power_rationale use exactly: '{BUYING_POWER_RATIONALE_TEMPLATE}' Do not return or alter deterministic facts, make any other claim, or provide hidden reasoning."""
+NARRATIVE_PROMPT = f"""You write bounded commercial copy for one selected audience trend. Use only the supplied evidence and return exactly the six requested fields. Copy source_cluster_name exactly as name. When suddenly_trending is true, use this summary exactly: '{SUDDEN_SUMMARY_TEMPLATE}' Otherwise use exactly: '{SUMMARY_TEMPLATE}' Choose only schema-listed brand categories and a buying-power rating. For commercial_interpretation use exactly: '{COMMERCIAL_INTERPRETATION_TEMPLATE}' For buying_power_rationale use exactly: '{BUYING_POWER_RATIONALE_TEMPLATE}' Do not return or alter deterministic facts, make any other claim, or provide hidden reasoning."""
 
 _PORTFOLIO_SCHEMA_PATH = (
     Path(__file__).with_name("schemas") / "trend-portfolio.schema.json"
@@ -34,6 +37,13 @@ NARRATIVE_SCHEMA = cast(
     dict[str, object],
     _PORTFOLIO_SCHEMA["$defs"]["narrative"],
 )
+PROVIDER_NARRATIVE_SCHEMA = deepcopy(NARRATIVE_SCHEMA)
+cast(
+    dict[str, object],
+    cast(dict[str, object], PROVIDER_NARRATIVE_SCHEMA["properties"])[
+        "brand_categories"
+    ],
+).pop("uniqueItems", None)
 
 _PROHIBITED_CLAIMS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -198,6 +208,9 @@ def narrative_validation_errors(
         return tuple(schema_errors)
     assert isinstance(output, dict)
     text = " ".join(_strings_in(output))
+    source_name = evidence.get("source_cluster_name")
+    if isinstance(source_name, str):
+        text = text.replace(source_name, "")
     claim_errors = tuple(
         f"prohibited {claim} claim"
         for claim, pattern in _PROHIBITED_CLAIMS
@@ -277,13 +290,24 @@ def _bounded_template_errors(
     categories = cast(list[str], output["brand_categories"])
     rating = output["buying_power_rating"]
     category_text = ", ".join(categories)
+    suddenly_trending = evidence.get("suddenly_trending") is True
     direction_word = "rose" if direction == "robust_growth" else "declined"
+    expected_summary = (
+        SUDDEN_SUMMARY_TEMPLATE.format(name=name)
+        if suddenly_trending
+        else SUMMARY_TEMPLATE.format(name=name, direction_word=direction_word)
+    )
+    allowed_summaries = {expected_summary}
+    if direction == "robust_growth":
+        allowed_summaries.add(
+            SUMMARY_TEMPLATE.format(name=name, direction_word="growing")
+        )
+    elif direction == "robust_shrinking":
+        allowed_summaries.add(
+            SUMMARY_TEMPLATE.format(name=name, direction_word="shrinking")
+        )
     expected = {
         "name": name,
-        "summary": SUMMARY_TEMPLATE.format(
-            name=name,
-            direction_word=direction_word,
-        ),
         "commercial_interpretation": COMMERCIAL_INTERPRETATION_TEMPLATE.format(
             category_text=category_text,
         ),
@@ -292,10 +316,18 @@ def _bounded_template_errors(
             category_text=category_text,
         ),
     }
-    return tuple(
+    summary_errors = (
+        ("summary is outside the bounded narrative template",)
+        if output["summary"] not in allowed_summaries
+        else ()
+    )
+    return (
+        *summary_errors,
+        *tuple(
         f"{field} is outside the bounded narrative template"
         for field, expected_value in expected.items()
         if output[field] != expected_value
+        ),
     )
 
 
@@ -327,9 +359,10 @@ class LangChainGroqNarrativeAdapter:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         response = self._chat_model.with_structured_output(
-            NARRATIVE_SCHEMA,
+            PROVIDER_NARRATIVE_SCHEMA,
             method="json_schema",
             include_raw=True,
+            strict=True,
         ).invoke(
             [
                 SystemMessage(content=request.prompt),

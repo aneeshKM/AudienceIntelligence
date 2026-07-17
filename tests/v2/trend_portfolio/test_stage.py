@@ -8,6 +8,9 @@ import unittest
 from pathlib import Path
 
 from tests.v2.trend_portfolio.test_traffic import _artifacts
+from audience_trend_miner.v2.trend_portfolio.narratives import (
+    narrative_validation_errors,
+)
 
 
 def _publish_qualifying_upstream(root: Path, run_id: str) -> tuple[Path, Path]:
@@ -33,6 +36,23 @@ def _publish_qualifying_upstream(root: Path, run_id: str) -> tuple[Path, Path]:
         ]
     for cutoff in evidence["payload"]["daily_cutoffs"]:
         cutoff["views_ceil"] = 5_000
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    return evidence_path, adjudication_path
+
+
+def _publish_nonqualifying_upstream(root: Path, run_id: str) -> tuple[Path, Path]:
+    evidence_path, adjudication_path = _artifacts(root, run_id=run_id)
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    successful_dates = {
+        day["date"]
+        for day in evidence["payload"]["nominal_days"]
+        if day["status"] == "successful"
+    }
+    for page in evidence["payload"]["canonical_pages"]:
+        page["observations"] = [
+            {"date": day, "views_ceil": 100}
+            for day in sorted(successful_dates)
+        ]
     evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
     return evidence_path, adjudication_path
 
@@ -126,6 +146,22 @@ def _write_valid_fixture(path: Path) -> None:
 
 
 class TrendPortfolioStageTest(unittest.TestCase):
+    def test_source_name_identity_words_are_not_treated_as_invented_claims(self) -> None:
+        evidence = {
+            "source_cluster_name": "Godzilla Kaiju Fans",
+            "direction": "sudden_growth",
+            "suddenly_trending": True,
+        }
+        narrative = _bounded_narrative(
+            "Godzilla Kaiju Fans", "sudden_growth", "Entertainment"
+        )
+        narrative["summary"] = (
+            "Attention to Godzilla Kaiju Fans topics was suddenly trending "
+            "in the supplied comparison."
+        )
+
+        self.assertEqual(narrative_validation_errors(narrative, evidence), ())
+
     def test_rejects_equivalent_prohibited_claims_and_invented_traffic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -202,7 +238,7 @@ class TrendPortfolioStageTest(unittest.TestCase):
     def test_no_qualifying_cluster_publishes_empty_portfolio_without_calls(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            _artifacts(root, run_id="empty-run")
+            _publish_nonqualifying_upstream(root, "empty-run")
             fixture_path = root / "empty.json"
             fixture_path.write_text(
                 json.dumps(

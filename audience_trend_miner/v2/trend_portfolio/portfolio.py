@@ -7,7 +7,6 @@ from typing import Iterable
 from audience_trend_miner.v2.trend_portfolio.traffic import ClusterTraffic
 
 
-MINIMUM_CURRENT_VIEWS = 100_000
 MAXIMUM_PORTFOLIO_SIZE = 10
 MAXIMUM_CHANGE_OCTAVES = 10
 
@@ -46,8 +45,8 @@ def qualify_and_rank_portfolio(
             impact_score=_impact_score(traffic),
         )
         for traffic in audit_cluster_traffic
-        if traffic.direction in {"robust_growth", "robust_shrinking"}
-        and traffic.current.minimum >= MINIMUM_CURRENT_VIEWS
+        if traffic.direction
+        in {"robust_growth", "robust_shrinking", "sudden_growth"}
     )
     ranked = sorted(
         qualified,

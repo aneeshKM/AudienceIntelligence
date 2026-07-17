@@ -23,17 +23,18 @@ let streamWanted = false;
 let followProgress = true;
 let lastProgressScrollTop = 0;
 let pollGeneration = 0;
+let dateSelectionGeneration = 0;
 const modulePanels = new Map();
 const directions = [
   {
-    contractValue: "robust_growth",
+    contractValues: ["robust_growth", "sudden_growth"],
     selector: "#growing-audiences",
     label: "Growing",
     icon: "↗",
     className: "growing",
   },
   {
-    contractValue: "robust_shrinking",
+    contractValues: ["robust_shrinking"],
     selector: "#shrinking-audiences",
     label: "Shrinking",
     icon: "↘",
@@ -44,6 +45,10 @@ const directions = [
 const localToday = new Date();
 localToday.setMinutes(localToday.getMinutes() - localToday.getTimezoneOffset());
 asOfInput.value = localToday.toISOString().slice(0, 10);
+
+asOfInput.addEventListener("change", () => {
+  loadCompletedDate(asOfInput.value, ++dateSelectionGeneration);
+});
 
 progressFeed.addEventListener(
   "scroll",
@@ -76,6 +81,7 @@ newRunButton.addEventListener("click", () => {
   progressSection.hidden = true;
   portfolioSection.hidden = true;
   newRunButton.hidden = true;
+  startButton.hidden = false;
   asOfInput.value = "";
   startButton.querySelector("span").textContent = "Start new run";
   setStatus("Choose an As-of Date for the new run.");
@@ -117,6 +123,7 @@ form.addEventListener("submit", async (event) => {
 
   const asOf = asOfInput.value;
   const runId = runIdForDate(asOf);
+  if (activeRun?.id === runId && activeRun.status === "succeeded") return;
   const isNewRun = activeRun?.id !== runId;
   beginRun(runId, asOf, isNewRun);
 
@@ -146,7 +153,7 @@ form.addEventListener("submit", async (event) => {
 function beginRun(runId, asOf, clearExisting) {
   stopStreaming();
   pollGeneration += 1;
-  activeRun = { id: runId, asOf };
+  activeRun = { id: runId, asOf, status: "running" };
   if (clearExisting) {
     lastSequence = 0;
     progressFeed.replaceChildren();
@@ -154,6 +161,7 @@ function beginRun(runId, asOf, clearExisting) {
   }
   portfolioSection.hidden = true;
   progressSection.hidden = false;
+  startButton.hidden = false;
   startButton.disabled = true;
   newRunButton.hidden = true;
   cancelButton.disabled = false;
@@ -164,6 +172,7 @@ function beginRun(runId, asOf, clearExisting) {
 }
 
 function finishControls(retry) {
+  startButton.hidden = false;
   startButton.disabled = false;
   newRunButton.hidden = false;
   cancelButton.hidden = true;
@@ -171,6 +180,14 @@ function finishControls(retry) {
   startButton.querySelector("span").textContent = retry
     ? "Retry or resume run"
     : "Start or resume run";
+}
+
+function finishCompletedControls() {
+  startButton.disabled = false;
+  startButton.hidden = true;
+  newRunButton.hidden = false;
+  cancelButton.hidden = true;
+  cancelButton.disabled = false;
 }
 
 function setStatus(message, isError = false) {
@@ -225,8 +242,9 @@ async function pollRun(runId, generation) {
       const state = await response.json();
       if (state.status === "succeeded") {
         stopStreaming();
+        activeRun.status = "succeeded";
         setStatus(`${runId} completed. Audience Portfolio is ready.`);
-        finishControls(false);
+        finishCompletedControls();
         await loadPortfolio(runId);
         return;
       }
@@ -351,6 +369,35 @@ function runIdForDate(asOf) {
   return `run-${asOf}`;
 }
 
+async function loadCompletedDate(asOf, generation) {
+  if (!asOf) return;
+  const runId = runIdForDate(asOf);
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/portfolio`);
+    if (generation !== dateSelectionGeneration) return;
+    if (response.status === 404) {
+      if (activeRun?.status === "succeeded") activeRun = null;
+      portfolioSection.hidden = true;
+      startButton.hidden = false;
+      newRunButton.hidden = true;
+      startButton.querySelector("span").textContent = "Start or resume run";
+      setStatus(`No completed run found for ${asOf}. Ready to run.`);
+      return;
+    }
+    if (!response.ok) throw new Error(await responseDetail(response));
+    stopStreaming();
+    pollGeneration += 1;
+    activeRun = { id: runId, asOf, status: "succeeded" };
+    progressSection.hidden = true;
+    finishCompletedControls();
+    renderPortfolio(await response.json());
+    setStatus(`${runId} completed. Audience Portfolio is ready.`);
+  } catch (error) {
+    if (generation !== dateSelectionGeneration) return;
+    setStatus(error.message || "The completed portfolio could not be loaded.", true);
+  }
+}
+
 async function loadPortfolio(runId) {
   try {
     const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/portfolio`);
@@ -373,7 +420,7 @@ function renderPortfolio(portfolio) {
     renderDirection(
       direction,
       portfolio.audience_portfolio.filter(
-        (audience) => audience.direction === direction.contractValue,
+        (audience) => direction.contractValues.includes(audience.direction),
       ),
     );
   }
@@ -390,10 +437,13 @@ function renderDirection(direction, audiences) {
   for (const audience of audiences) {
     const card = cardTemplate.content.firstElementChild.cloneNode(true);
     card.classList.add(direction.className);
-    card.querySelector(".direction-badge").textContent =
-      `${direction.icon} ${direction.label}`;
+    const sudden = audience.direction === "sudden_growth";
+    card.querySelector(".direction-badge").textContent = sudden
+      ? "⚡ Suddenly trending"
+      : `${direction.icon} ${direction.label}`;
     card.querySelector(".percentage-change").textContent = formatChange(
       audience.percentage_change,
+      sudden,
     );
     card.querySelector("h4").textContent = audience.narrative.name;
     card.querySelector(".trend-summary").textContent = audience.narrative.summary;
@@ -414,7 +464,8 @@ function renderDirection(direction, audiences) {
   }
 }
 
-function formatChange(value) {
+function formatChange(value, suddenlyTrending = false) {
+  if (suddenlyTrending) return "Suddenly trending";
   if (value === null) return "Change not available";
   return `${new Intl.NumberFormat(undefined, {
     maximumFractionDigits: 1,

@@ -3,6 +3,9 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
+import random
+import re
+import time
 from typing import Callable, Literal, Protocol, Sequence, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
@@ -149,10 +152,12 @@ def execute_cluster_adjudication(
     adapter: AdjudicationAdapter,
     *,
     step_progress: Callable[[ModelStepRecord], None] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ) -> ClusterAdjudicationResult:
     """Adjudicate one Preliminary Cluster with bounded critique and revision."""
     members = _model_visible_members(preliminary_cluster)
     steps: list[ModelStepRecord] = []
+    wait = sleep or time.sleep
 
     def invoke(request: AdjudicationRequest) -> object:
         attempts: list[ProviderAttempt] = []
@@ -169,6 +174,10 @@ def execute_cluster_adjudication(
                         error=f"{type(error).__name__}: {error}",
                     )
                 )
+                if attempt_number < 3:
+                    retry_delay = _rate_limit_retry_delay(error, attempt_number)
+                    if retry_delay is not None:
+                        wait(retry_delay)
                 continue
             attempts.append(
                 ProviderAttempt(
@@ -327,6 +336,41 @@ def execute_cluster_adjudication(
         validation_errors=result.validation_errors,
         steps=tuple(steps),
     )
+
+
+def _rate_limit_retry_delay(error: Exception, attempt_number: int) -> float | None:
+    """Return a safe wait for Groq 429 responses, preferring provider guidance."""
+    status_code = getattr(error, "status_code", None)
+    message = str(error)
+    if (
+        type(error).__name__ != "RateLimitError"
+        and status_code != 429
+        and "Error code: 429" not in message
+    ):
+        return None
+
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        retry_after = headers.get("retry-after") or headers.get("Retry-After")
+        try:
+            if retry_after is not None:
+                return max(float(retry_after), 0.0) + 0.1
+        except (TypeError, ValueError):
+            pass
+
+    duration = re.search(
+        r"try again in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|s)\b",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if duration is not None:
+        value = float(duration.group(1))
+        if duration.group(2).lower() == "ms":
+            value /= 1000
+        return value + 0.1
+
+    return min(2 ** (attempt_number - 1), 30) + random.uniform(0.0, 0.25)
 
 
 class _DeliveryExhausted(RuntimeError):

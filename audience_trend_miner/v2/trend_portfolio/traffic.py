@@ -22,6 +22,7 @@ from audience_trend_miner.v2.wikimedia_evidence.stage import (
 Direction = Literal[
     "robust_growth",
     "robust_shrinking",
+    "sudden_growth",
     "uncertain_direction",
 ]
 Window = Literal["previous", "current"]
@@ -273,6 +274,8 @@ def _window_traffic(
 
 
 def _direction(previous: WindowTraffic, current: WindowTraffic) -> Direction:
+    if previous.observed_total == 0 and current.observed_total > 0:
+        return "sudden_growth"
     if (
         current.conservative_observed_minimum * previous.successful_days
         > previous.conservative_observed_maximum * current.successful_days

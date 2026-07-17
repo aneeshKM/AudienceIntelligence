@@ -15,6 +15,66 @@ FIXTURES = Path(__file__).with_name("fixtures")
 
 
 class ClusterAdjudicationGraphTest(unittest.TestCase):
+    def test_rate_limit_retries_honor_provider_retry_after_header(self) -> None:
+        class HeaderRateLimitError(Exception):
+            status_code = 429
+
+            def __init__(self) -> None:
+                super().__init__("rate limited")
+                self.response = type(
+                    "Response", (), {"headers": {"retry-after": "2.5"}}
+                )()
+
+        class EventuallySuccessfulAdapter:
+            model = "fixture/model"
+
+            def __init__(self) -> None:
+                self.attempts = 0
+
+            def invoke(self, request: object) -> object:
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise HeaderRateLimitError()
+                if self.attempts == 2:
+                    return {
+                        "groups": [group("Home Air", [101, 102])],
+                        "rejected": [],
+                    }
+                return {"approved": True, "challenges": []}
+
+        waits: list[float] = []
+        adapter = EventuallySuccessfulAdapter()
+
+        result = execute_cluster_adjudication(
+            {"members": [page(101, "Air purifier"), page(102, "HEPA")]},
+            adapter,
+            sleep=waits.append,
+        )
+
+        self.assertEqual(result.validation_status, "valid")
+        self.assertEqual(waits, [2.6])
+
+    def test_rate_limit_retries_parse_provider_delay_from_error_message(self) -> None:
+        class RateLimitError(Exception):
+            pass
+
+        class ExhaustedAdapter:
+            model = "fixture/model"
+
+            def invoke(self, request: object) -> object:
+                raise RateLimitError("Please try again in 907.5ms")
+
+        waits: list[float] = []
+
+        result = execute_cluster_adjudication(
+            {"members": [page(101, "Air purifier"), page(102, "HEPA")]},
+            ExhaustedAdapter(),
+            sleep=waits.append,
+        )
+
+        self.assertEqual(result.validation_errors, ("exhausted_delivery:proposer",))
+        self.assertEqual(waits, [1.0075, 1.0075])
+
     def test_deterministic_adapter_failure_terminates_without_retrying(self) -> None:
         class InvalidAdapter:
             model = "invalid/cluster-model"

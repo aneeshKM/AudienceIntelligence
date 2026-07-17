@@ -38,7 +38,38 @@ class _InvalidStructuredChatModel:
         raise ValueError("unsupported structured output schema")
 
 
+class _PermissionDeniedRunnable:
+    def invoke(self, messages: object) -> object:
+        del messages
+        error = RuntimeError("model blocked at project level")
+        error.status_code = 403
+        raise error
+
+
+class _PermissionDeniedChatModel:
+    def with_structured_output(self, schema: object, **options: object) -> object:
+        del schema, options
+        return _PermissionDeniedRunnable()
+
+
 class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
+    def test_project_blocked_model_is_a_fatal_configuration_error(self) -> None:
+        adapter = LangChainGroqAdjudicationAdapter(
+            model="groq/compound-mini",
+            chat_model=_PermissionDeniedChatModel(),
+        )
+
+        with self.assertRaisesRegex(
+            V2ContractError, "unavailable to this project"
+        ):
+            adapter.invoke(
+                AdjudicationRequest(
+                    role="proposer",
+                    prompt="proposer prompt",
+                    members=(),
+                )
+            )
+
     def test_invalid_provider_contract_is_a_fatal_configuration_error(self) -> None:
         adapter = LangChainGroqAdjudicationAdapter(
             model="openai/gpt-oss-20b",
@@ -58,11 +89,21 @@ class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
 
     def test_adapter_selects_supported_structured_output_contract_by_model(self) -> None:
         scenarios = (
-            ("openai/gpt-oss-20b", "json_schema"),
-            ("qwen/qwen3.6-27b", "function_calling"),
+            (
+                "openai/gpt-oss-20b",
+                {"method": "json_schema", "include_raw": True, "strict": True},
+            ),
+            (
+                "qwen/qwen3.6-27b",
+                {"method": "function_calling", "include_raw": True},
+            ),
+            (
+                "groq/compound-mini",
+                {"method": "json_mode", "include_raw": True},
+            ),
         )
 
-        for model, expected_method in scenarios:
+        for model, expected_options in scenarios:
             with self.subTest(model=model):
                 chat_model = _FakeChatModel(
                     {
@@ -84,7 +125,29 @@ class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
                 )
 
                 self.assertEqual(chat_model.schema["title"], "ClusterDecision")
-                self.assertEqual(chat_model.options["method"], expected_method)
+                self.assertEqual(chat_model.options, expected_options)
+
+    def test_compound_json_mode_receives_the_exact_schema_in_its_prompt(self) -> None:
+        parsed = {"approved": True, "challenges": []}
+        chat_model = _FakeChatModel(
+            {"raw": object(), "parsed": parsed, "parsing_error": None}
+        )
+        adapter = LangChainGroqAdjudicationAdapter(
+            model="groq/compound-mini", chat_model=chat_model
+        )
+
+        result = adapter.invoke(
+            AdjudicationRequest(
+                role="critic",
+                prompt="critic prompt",
+                members=(),
+            )
+        )
+
+        self.assertEqual(result, parsed)
+        messages = chat_model.runnable.messages
+        self.assertIn("Return only one JSON object", messages[0].content)
+        self.assertIn('"approved":{"type":"boolean"}', messages[0].content)
 
     def test_adapter_requests_provider_schema_without_exposing_disallowed_evidence(self) -> None:
         parsed = {

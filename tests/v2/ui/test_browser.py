@@ -219,7 +219,7 @@ class BrowserWorkflowTest(unittest.TestCase):
                 "2",
             )
 
-    def test_mixed_directions_are_named_and_not_conveyed_only_by_color(self) -> None:
+    def test_completed_date_shows_trends_without_starting_or_resuming(self) -> None:
         def audience(cluster_id: str, direction: str, change: float):
             return {
                 "cluster_id": cluster_id,
@@ -263,8 +263,13 @@ class BrowserWorkflowTest(unittest.TestCase):
                     audience("shrinking", "robust_shrinking", -20.0),
                 ],
             )
+            invocation_marker = root / "cli-was-invoked.txt"
             successful_cli = root / "successful_cli.py"
-            successful_cli.write_text("raise SystemExit(0)\n", encoding="utf-8")
+            successful_cli.write_text(
+                "from pathlib import Path\n"
+                f"Path({str(invocation_marker)!r}).write_text('invoked')\n",
+                encoding="utf-8",
+            )
             app = create_app(
                 output_root=output_root,
                 cli_command=(sys.executable, str(successful_cli)),
@@ -275,9 +280,13 @@ class BrowserWorkflowTest(unittest.TestCase):
                 page = browser.new_page()
                 page.goto(base_url)
                 page.get_by_label("As-of Date").fill("2026-07-17")
-                page.get_by_role("button", name="Start or resume run").click()
+                page.get_by_label("As-of Date").press("Tab")
                 page.get_by_text("↗ Growing", exact=True).wait_for(timeout=10_000)
                 self.assertTrue(page.get_by_text("↘ Shrinking", exact=True).is_visible())
+                self.assertFalse(
+                    page.get_by_role("button", name="Start or resume run").is_visible()
+                )
+                self.assertFalse(invocation_marker.exists())
                 self.assertTrue(
                     page.get_by_role("status").get_attribute("aria-live") == "polite"
                 )

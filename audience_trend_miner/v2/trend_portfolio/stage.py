@@ -141,7 +141,7 @@ def execute_trend_portfolio_stage(
         return artifact_path
 
     emit("attachment", "attached traffic to terminal membership", 1, 1)
-    emit("qualification", f"qualified {len(selected)} robust clusters", 1, 1)
+    emit("qualification", f"qualified {len(selected)} directional clusters", 1, 1)
     emit("ranking", f"ranked and selected {len(selected)} clusters", 1, 1)
 
     completed = _load_checkpoint(
@@ -253,6 +253,7 @@ def _model_evidence(
         "source_cluster_rationale": traffic.rationale,
         "members": members,
         "direction": traffic.direction,
+        "suddenly_trending": traffic.direction == "sudden_growth",
     }
 
 
@@ -287,7 +288,9 @@ def _deterministic_facts(trend: AudienceTrend) -> dict[str, object]:
             "current": traffic.current.observed_page_days
             / (traffic.current.successful_days * members),
         },
-        "confidence": "robust",
+        "confidence": (
+            "observed" if traffic.direction == "sudden_growth" else "robust"
+        ),
         "impact_score": trend.impact_score,
     }
 

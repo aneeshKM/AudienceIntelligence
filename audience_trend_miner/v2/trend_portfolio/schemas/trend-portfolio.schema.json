@@ -62,6 +62,7 @@
     "traffic": {"type": "object", "additionalProperties": false, "required": ["previous", "current"], "properties": {"previous": {"$ref": "#/$defs/windowTraffic"}, "current": {"$ref": "#/$defs/windowTraffic"}}},
     "coverage": {"type": "object", "additionalProperties": false, "required": ["previous", "current"], "properties": {"previous": {"type": "number", "minimum": 0, "maximum": 1}, "current": {"type": "number", "minimum": 0, "maximum": 1}}},
     "narrative": {
+      "title": "AudienceNarrative",
       "type": "object", "additionalProperties": false,
       "required": ["name", "summary", "commercial_interpretation", "brand_categories", "buying_power_rating", "buying_power_rationale"],
       "properties": {
@@ -78,8 +79,8 @@
       "required": ["cluster_id", "source_preliminary_cluster_id", "direction", "traffic", "percentage_change", "coverage", "confidence", "impact_score", "narrative"],
       "properties": {
         "cluster_id": {"type": "string", "minLength": 1}, "source_preliminary_cluster_id": {"type": "string", "minLength": 1},
-        "direction": {"enum": ["robust_growth", "robust_shrinking"]}, "traffic": {"$ref": "#/$defs/traffic"}, "percentage_change": {"type": ["number", "null"]},
-        "coverage": {"$ref": "#/$defs/coverage"}, "confidence": {"const": "robust"}, "impact_score": {"type": "number", "minimum": 0}, "narrative": {"$ref": "#/$defs/narrative"}
+        "direction": {"enum": ["robust_growth", "robust_shrinking", "sudden_growth"]}, "traffic": {"$ref": "#/$defs/traffic"}, "percentage_change": {"type": ["number", "null"]},
+        "coverage": {"$ref": "#/$defs/coverage"}, "confidence": {"enum": ["robust", "observed"]}, "impact_score": {"type": "number", "minimum": 0}, "narrative": {"$ref": "#/$defs/narrative"}
       }
     },
     "attempt": {
@@ -104,7 +105,7 @@
       "properties": {
         "cluster_id": {"type": "string", "minLength": 1}, "source_preliminary_cluster_id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}, "rationale": {"type": "string", "minLength": 1},
         "member_page_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "integer"}}, "previous": {"$ref": "#/$defs/windowTraffic"}, "current": {"$ref": "#/$defs/windowTraffic"},
-        "direction": {"enum": ["robust_growth", "robust_shrinking", "uncertain_direction"]}
+        "direction": {"enum": ["robust_growth", "robust_shrinking", "sudden_growth", "uncertain_direction"]}
       }
     }
   }

@@ -280,7 +280,33 @@ def execute_wikimedia_evidence(
             unavailable_titles.update(json.loads(result.subject))
             continue
         for page in result.evidence["pages"]:
-            canonical_metadata_by_page_id[int(page["page_id"])] = page
+            page_id = int(page["page_id"])
+            existing = canonical_metadata_by_page_id.get(page_id)
+            if existing is None:
+                canonical_metadata_by_page_id[page_id] = {
+                    **page,
+                    "categories": sorted(
+                        {str(category) for category in page.get("categories", [])}
+                    ),
+                }
+                continue
+            canonical_title = str(page["canonical_title"])
+            if existing["canonical_title"] != canonical_title:
+                raise V2ContractError(f"canonical title conflict for page {page_id}")
+            existing_lead = str(existing.get("lead", ""))
+            incoming_lead = str(page.get("lead", ""))
+            if existing_lead and incoming_lead and existing_lead != incoming_lead:
+                raise V2ContractError(f"canonical lead conflict for page {page_id}")
+            existing["lead"] = existing_lead or incoming_lead
+            existing_categories = {
+                str(category) for category in existing.get("categories", [])
+            }
+            incoming_categories = {
+                str(category) for category in page.get("categories", [])
+            }
+            existing["categories"] = sorted(
+                existing_categories | incoming_categories
+            )
         unavailable_titles.update(result.evidence["unavailable_titles"])
         for alias, page_id in result.evidence["aliases"].items():
             canonical_metadata_by_alias[alias] = canonical_metadata_by_page_id[

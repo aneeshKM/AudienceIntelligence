@@ -289,8 +289,9 @@ Use separate configurable model settings:
 - cluster adjudication: `AUDIENCE_TREND_MINER_CLUSTER_MODEL`;
 - final narrative: `AUDIENCE_TREND_MINER_NARRATIVE_MODEL`.
 
-The intended cluster model is `openai/gpt-oss-20b`; a current development
-fallback is `qwen/qwen3.6-27b`. Qwen output requires local schema validation.
+The intended cluster model is `groq/compound-mini`, using JSON Object Mode plus
+local deterministic schema validation. Pace production requests below the
+provider RPM ceiling and honor `Retry-After` on `429` responses.
 Use `openai/gpt-oss-120b` for final narratives.
 
 ## 9. Terminal membership
@@ -340,15 +341,20 @@ robust_growth:
 robust_shrinking:
     current maximum < previous minimum
 
+sudden_growth:
+    previous observed total = 0 and current observed total > 0
+
 uncertain:
     ranges overlap
 ```
 
-Require at least 100,000 current-window views using the conservative current
-minimum. Do not send any of these values or classifications to the cluster LLM.
+Do not apply a minimum current-window view gate. For sudden growth, publish no
+percentage because division by a zero observed baseline is undefined; label the
+trend "Suddenly trending" instead. Do not send any of these values or
+classifications to the cluster LLM.
 
-Show robust growing and robust shrinking clusters in the UI. Exclude uncertain
-clusters in V2; displaying them is future scope.
+Show robust growing, robust shrinking, and suddenly trending clusters in the UI.
+Exclude uncertain clusters in V2; displaying them is future scope.
 
 ## 11. Ranking
 
@@ -365,7 +371,7 @@ Select at most the top ten clusters before narrative generation.
 
 ## 12. Final narrative generation
 
-Make one `openai/gpt-oss-120b` call per selected robust cluster, for at most ten
+Make one `openai/gpt-oss-120b` call per selected directional cluster, for at most ten
 narrative calls per run. Do not batch all clusters into one prompt.
 
 Deterministic code owns direction, view totals, percentage change, coverage,

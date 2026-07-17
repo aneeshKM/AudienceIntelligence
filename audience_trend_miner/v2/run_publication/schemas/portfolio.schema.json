@@ -94,11 +94,11 @@
       "properties": {
         "cluster_id": {"type": "string", "minLength": 1},
         "source_preliminary_cluster_id": {"type": "string", "minLength": 1},
-        "direction": {"enum": ["robust_growth", "robust_shrinking"]},
+        "direction": {"enum": ["robust_growth", "robust_shrinking", "sudden_growth"]},
         "traffic": {"$ref": "#/$defs/traffic"},
         "percentage_change": {"type": ["number", "null"]},
         "coverage": {"$ref": "#/$defs/coverage"},
-        "confidence": {"const": "robust"},
+        "confidence": {"enum": ["robust", "observed"]},
         "impact_score": {"type": "number", "minimum": 0},
         "narrative": {"$ref": "#/$defs/narrative"}
       }

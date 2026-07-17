@@ -12,11 +12,11 @@ import jsonschema
 
 from audience_trend_miner.v2.shared import canonical_json_fingerprint
 from tests.v2.trend_portfolio.test_stage import (
+    _publish_nonqualifying_upstream,
     _publish_qualifying_upstream,
     _run_stage as run_trend_stage,
     _write_valid_fixture,
 )
-from tests.v2.trend_portfolio.test_traffic import _artifacts
 
 
 def _semantic_evidence_fingerprint(evidence: dict[str, object]) -> str:
@@ -46,7 +46,7 @@ def _publish_completed_upstream(
     evidence_path, adjudication_path = (
         _publish_qualifying_upstream(root, run_id)
         if non_empty
-        else _artifacts(root, run_id=run_id)
+        else _publish_nonqualifying_upstream(root, run_id)
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     adjudication = json.loads(adjudication_path.read_text(encoding="utf-8"))

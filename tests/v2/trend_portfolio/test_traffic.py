@@ -184,6 +184,28 @@ def _artifacts(root: Path, *, run_id: str = "trend-run") -> tuple[Path, Path]:
 
 
 class ClusterTrafficTest(unittest.TestCase):
+    def test_zero_observed_previous_week_with_current_views_is_sudden_growth(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            evidence_path, adjudication_path = _artifacts(Path(temporary_directory))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            for page in evidence["payload"]["canonical_pages"][:2]:
+                page["observations"] = [
+                    observation
+                    for observation in page["observations"]
+                    if observation["date"] in CURRENT_DAYS
+                ]
+            evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+
+            trends = attach_cluster_traffic(
+                run_id="trend-run",
+                wikimedia_evidence_path=evidence_path,
+                cluster_adjudication_path=adjudication_path,
+            )
+
+            self.assertEqual(trends[0].previous.observed_total, 0)
+            self.assertGreater(trends[0].current.observed_total, 0)
+            self.assertEqual(trends[0].direction, "sudden_growth")
+
     def test_attaches_censored_traffic_and_classifies_non_overlapping_ranges(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             evidence_path, adjudication_path = _artifacts(Path(temporary_directory))

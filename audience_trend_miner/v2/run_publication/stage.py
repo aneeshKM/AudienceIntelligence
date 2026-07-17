@@ -451,6 +451,7 @@ def _validate_cross_stage_values(
             "source_cluster_rationale": cluster["rationale"],
             "members": cluster["members"],
             "direction": record["direction"],
+            "suddenly_trending": record["direction"] == "sudden_growth",
         }
         previous = expected_trend.final_cluster_traffic.previous
         current = expected_trend.final_cluster_traffic.current

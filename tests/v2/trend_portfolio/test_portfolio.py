@@ -67,8 +67,8 @@ class AudiencePortfolioTest(unittest.TestCase):
             current_views=1_000_000,
             direction="uncertain_direction",
         )
-        below_scale = _trend(
-            "below-scale",
+        small_but_robust = _trend(
+            "small-but-robust",
             previous_views=1,
             current_views=1_000_000,
             current_minimum=99_999,
@@ -82,7 +82,7 @@ class AudiencePortfolioTest(unittest.TestCase):
         )
 
         qualification = qualify_and_rank_portfolio(
-            (growing, uncertain, below_scale, shrinking, malformed)
+            (growing, uncertain, small_but_robust, shrinking, malformed)
         )
         portfolio = qualification.portfolio
 
@@ -91,19 +91,19 @@ class AudiencePortfolioTest(unittest.TestCase):
                 trend.final_cluster_traffic.cluster_id
                 for trend in portfolio.audience_trends
             ],
-            ["shrinking", "growing"],
-        )
-        self.assertAlmostEqual(
-            portfolio.audience_trends[0].impact_score,
-            math.log(400_001) * abs(math.log2(200_001 / 400_001)),
+            ["small-but-robust", "shrinking", "growing"],
         )
         self.assertAlmostEqual(
             portfolio.audience_trends[1].impact_score,
+            math.log(400_001) * abs(math.log2(200_001 / 400_001)),
+        )
+        self.assertAlmostEqual(
+            portfolio.audience_trends[2].impact_score,
             math.log(200_001) * abs(math.log2(200_001 / 100_001)),
         )
         self.assertEqual(
             qualification.audit_cluster_traffic,
-            (growing, uncertain, below_scale, shrinking, malformed),
+            (growing, uncertain, small_but_robust, shrinking, malformed),
         )
 
     def test_caps_change_and_selects_top_ten_with_stable_ties(self) -> None:
@@ -140,9 +140,10 @@ class AudiencePortfolioTest(unittest.TestCase):
                     direction="uncertain_direction",
                 ),
                 _trend(
-                    "too-small",
+                    "malformed",
                     previous_views=1,
                     current_views=99_999,
+                    direction="not-a-direction",
                 ),
             )
         )
