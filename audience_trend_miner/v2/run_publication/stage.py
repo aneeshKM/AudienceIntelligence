@@ -245,6 +245,10 @@ def _validate_counts_and_membership(
         f"preliminary-cluster-{index:04d}"
         for index in range(1, len(preliminary) + 1)
     ]
+    expected_final_ids = [
+        f"final-audience-cluster-{index:04d}"
+        for index in range(1, len(final_clusters) + 1)
+    ]
     if adjudication_counts != {
         "preliminary_clusters": len(preliminary),
         "final_audience_clusters": len(final_clusters),
@@ -252,8 +256,43 @@ def _validate_counts_and_membership(
         "rejected_pages": len(rejected),
     } or [
         record["preliminary_cluster_id"] for record in adjudications
-    ] != expected_preliminary_ids:
+    ] != expected_preliminary_ids or [
+        cluster["cluster_id"] for cluster in final_clusters
+    ] != expected_final_ids:
         raise V2ContractError("Cluster Adjudication counts are inconsistent")
+    for source_id, source_cluster in zip(
+        expected_preliminary_ids, preliminary, strict=True
+    ):
+        expected_page_ids = [
+            member["page_id"]
+            for member in _list_of_mappings(source_cluster["members"])
+        ]
+        terminal_page_ids = [
+            member["page_id"]
+            for cluster in final_clusters
+            if cluster["source_preliminary_cluster_id"] == source_id
+            for member in _list_of_mappings(cluster["members"])
+        ] + [
+            member["page_id"]
+            for member in rejected
+            if member["source_preliminary_cluster_id"] == source_id
+        ]
+        if (
+            len(terminal_page_ids) != len(set(terminal_page_ids))
+            or set(terminal_page_ids) != set(expected_page_ids)
+        ):
+            raise V2ContractError(
+                "Cluster Adjudication terminal provenance is inconsistent"
+            )
+    valid_sources = set(expected_preliminary_ids)
+    if any(
+        cluster["source_preliminary_cluster_id"] not in valid_sources
+        for cluster in final_clusters
+    ) or any(
+        member["source_preliminary_cluster_id"] not in valid_sources
+        for member in rejected
+    ):
+        raise V2ContractError("Cluster Adjudication terminal provenance is inconsistent")
 
     portfolio = _list_of_mappings(trend["audience_portfolio"])
     narratives = _list_of_mappings(trend["narrative_evidence"])
@@ -398,6 +437,11 @@ def _validate_staged_publication(
     manifest = products["manifest.json"]
     if manifest["modules"] != _module_integrity(artifacts):
         raise V2ContractError("publication provenance does not match upstream artifacts")
+    expected_manifest = _manifest(
+        run_id, artifacts, expected_portfolio, directory
+    )
+    if manifest != expected_manifest:
+        raise V2ContractError("manifest provenance is internally inconsistent")
     published = _mapping(manifest["published_artifacts"])
     for name in ("portfolio.json", "audit.json"):
         record = _mapping(published[name])

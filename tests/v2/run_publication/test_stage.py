@@ -437,8 +437,36 @@ class RunPublicationStageTest(unittest.TestCase):
             self.assertNotEqual(resumed.returncode, 0)
             self.assertIn("collides with requested run", resumed.stderr)
 
+    def test_resume_rejects_schema_valid_but_false_manifest_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _publish_completed_upstream(root)
+            first = _run_publication(root)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            manifest_path = (
+                root / "publication-run" / "publication" / "manifest.json"
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["configuration_provenance"]["trend-portfolio"][
+                "model"
+            ] = "false/provenance"
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            resumed = _run_publication(root)
+
+            self.assertNotEqual(resumed.returncode, 0)
+            self.assertIn("collides with requested run", resumed.stderr)
+
     def test_rejects_duplicate_or_mismatched_internal_provenance(self) -> None:
-        scenarios = ("adjudication-ids", "duplicate-traffic")
+        scenarios = (
+            "adjudication-ids",
+            "duplicate-traffic",
+            "bogus-final-source",
+            "duplicate-final-id",
+        )
         for scenario in scenarios:
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
@@ -446,14 +474,39 @@ class RunPublicationStageTest(unittest.TestCase):
                 run_directory = root / "publication-run"
                 trend_path = run_directory / "trend-portfolio.json"
                 trend = json.loads(trend_path.read_text(encoding="utf-8"))
-                if scenario == "adjudication-ids":
+                if scenario in {
+                    "adjudication-ids",
+                    "bogus-final-source",
+                    "duplicate-final-id",
+                }:
                     adjudication_path = run_directory / "cluster-adjudication.json"
                     adjudication = json.loads(
                         adjudication_path.read_text(encoding="utf-8")
                     )
-                    adjudication["payload"]["adjudications"][1][
-                        "preliminary_cluster_id"
-                    ] = "preliminary-cluster-0001"
+                    if scenario == "adjudication-ids":
+                        adjudication["payload"]["adjudications"][1][
+                            "preliminary_cluster_id"
+                        ] = "preliminary-cluster-0001"
+                    elif scenario == "bogus-final-source":
+                        bogus = "preliminary-cluster-9999"
+                        adjudication["payload"]["final_audience_clusters"][0][
+                            "source_preliminary_cluster_id"
+                        ] = bogus
+                        for collection in (
+                            trend["payload"]["audience_portfolio"],
+                            trend["payload"]["audit_cluster_traffic"],
+                        ):
+                            collection[0]["source_preliminary_cluster_id"] = bogus
+                    else:
+                        adjudication["payload"]["final_audience_clusters"][1][
+                            "cluster_id"
+                        ] = adjudication["payload"]["final_audience_clusters"][0][
+                            "cluster_id"
+                        ]
+                        trend["payload"]["counts"] = {"qualified": 0, "narrated": 0}
+                        trend["payload"]["audience_portfolio"] = []
+                        trend["payload"]["narrative_evidence"] = []
+                        trend["payload"]["audit_cluster_traffic"].pop(1)
                     adjudication_path.write_text(
                         json.dumps(adjudication), encoding="utf-8"
                     )
