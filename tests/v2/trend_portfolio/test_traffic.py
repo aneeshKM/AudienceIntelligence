@@ -209,6 +209,61 @@ class ClusterTrafficTest(unittest.TestCase):
             self.assertEqual(growing.current.maximum, 2800)
             self.assertEqual(trends[2].previous.maximum, trends[2].current.minimum)
 
+    def test_mathematically_touching_unequal_windows_remain_uncertain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            evidence_path, adjudication_path = _artifacts(Path(temporary_directory))
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            payload = evidence["payload"]
+            for day in payload["nominal_days"]:
+                if day["date"] == "2026-07-06":
+                    day["status"] = "successful"
+                if day["date"] in {"2026-07-13", "2026-07-14", "2026-07-15"}:
+                    day["status"] = "unavailable"
+            payload["coverage"] = {"previous": 5, "current": 4}
+            payload["daily_cutoffs"] = [
+                item
+                for item in payload["daily_cutoffs"]
+                if item["date"] not in {"2026-07-13", "2026-07-14", "2026-07-15"}
+            ]
+            payload["daily_cutoffs"].append(
+                {"date": "2026-07-06", "views_ceil": 50}
+            )
+            allowed_dates = {
+                day["date"]
+                for day in payload["nominal_days"]
+                if day["status"] == "successful"
+            }
+            for page in payload["canonical_pages"]:
+                page["observations"] = [
+                    item
+                    for item in page["observations"]
+                    if item["date"] in allowed_dates
+                ]
+            touching_pages = payload["canonical_pages"][4:6]
+            for page in touching_pages:
+                page["observations"] = [
+                    *(
+                        {"date": day, "views_ceil": 140}
+                        for day in [*PREVIOUS_DAYS, "2026-07-06"]
+                    ),
+                    *(
+                        {"date": day, "views_ceil": 239}
+                        for day in CURRENT_DAYS[:4]
+                    ),
+                ]
+            evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+
+            trends = attach_cluster_traffic(
+                run_id="trend-run",
+                wikimedia_evidence_path=evidence_path,
+                cluster_adjudication_path=adjudication_path,
+            )
+
+            touching = trends[2]
+            self.assertEqual(touching.previous.maximum, 1960)
+            self.assertEqual(touching.current.minimum, 1960)
+            self.assertEqual(touching.direction, "uncertain_direction")
+
     def test_rejects_duplicate_terminal_membership_before_traffic_is_attached(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             evidence_path, adjudication_path = _artifacts(Path(temporary_directory))

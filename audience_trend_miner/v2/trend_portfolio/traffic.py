@@ -24,6 +24,7 @@ Direction = Literal[
     "robust_shrinking",
     "uncertain_direction",
 ]
+Window = Literal["previous", "current"]
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,8 @@ class WindowTraffic:
     observed_total: int
     observed_page_days: int
     successful_days: int
+    conservative_observed_minimum: int
+    conservative_observed_maximum: int
     seven_day_equivalent: float
     minimum: float
     maximum: float
@@ -50,6 +53,13 @@ class ClusterTraffic:
     previous: WindowTraffic
     current: WindowTraffic
     direction: Direction
+
+
+@dataclass(frozen=True)
+class _TrafficEvidence:
+    successful_dates: dict[Window, tuple[str, ...]]
+    cutoffs: dict[str, int]
+    pages: dict[int, dict[str, int]]
 
 
 def attach_cluster_traffic(
@@ -83,6 +93,7 @@ def attach_cluster_traffic(
     successful_dates = _successful_dates(evidence_payload)
     cutoffs = _daily_cutoffs(evidence_payload, successful_dates)
     pages = _canonical_pages(evidence_payload, successful_dates)
+    traffic_evidence = _TrafficEvidence(successful_dates, cutoffs, pages)
     clusters = cast(
         list[dict[str, object]], adjudication_payload["final_audience_clusters"]
     )
@@ -95,16 +106,12 @@ def attach_cluster_traffic(
         previous = _window_traffic(
             page_ids,
             "previous",
-            successful_dates,
-            cutoffs,
-            pages,
+            traffic_evidence,
         )
         current = _window_traffic(
             page_ids,
             "current",
-            successful_dates,
-            cutoffs,
-            pages,
+            traffic_evidence,
         )
         attached.append(
             ClusterTraffic(
@@ -141,9 +148,9 @@ def _compatible_payload(
 
 def _successful_dates(
     payload: dict[str, object],
-) -> dict[str, tuple[str, ...]]:
+) -> dict[Window, tuple[str, ...]]:
     nominal_days = cast(list[dict[str, object]], payload["nominal_days"])
-    dates: dict[str, list[str]] = {"previous": [], "current": []}
+    dates: dict[Window, list[str]] = {"previous": [], "current": []}
     seen: set[str] = set()
     for day in nominal_days:
         day_text = cast(str, day["date"])
@@ -151,7 +158,7 @@ def _successful_dates(
             raise V2ContractError("Wikimedia Evidence contains duplicate nominal days")
         seen.add(day_text)
         if day["status"] == "successful":
-            dates[cast(str, day["window"])].append(day_text)
+            dates[cast(Window, day["window"])].append(day_text)
     coverage = cast(dict[str, int], payload["coverage"])
     if any(len(dates[window]) != coverage[window] for window in dates):
         raise V2ContractError(
@@ -162,7 +169,7 @@ def _successful_dates(
 
 def _daily_cutoffs(
     payload: dict[str, object],
-    successful_dates: dict[str, tuple[str, ...]],
+    successful_dates: dict[Window, tuple[str, ...]],
 ) -> dict[str, int]:
     expected_dates = {
         day for dates in successful_dates.values() for day in dates
@@ -187,7 +194,7 @@ def _daily_cutoffs(
 
 def _canonical_pages(
     payload: dict[str, object],
-    successful_dates: dict[str, tuple[str, ...]],
+    successful_dates: dict[Window, tuple[str, ...]],
 ) -> dict[int, dict[str, int]]:
     allowed_dates = {
         day for dates in successful_dates.values() for day in dates
@@ -234,41 +241,46 @@ def _validate_terminal_membership(
 
 def _window_traffic(
     page_ids: tuple[int, ...],
-    window: str,
-    successful_dates: dict[str, tuple[str, ...]],
-    cutoffs: dict[str, int],
-    pages: dict[int, dict[str, int]],
+    window: Window,
+    evidence: _TrafficEvidence,
 ) -> WindowTraffic:
-    dates = successful_dates[window]
+    dates = evidence.successful_dates[window]
     observed_total = 0
     observed_page_days = 0
     minimum = 0
     maximum = 0
     for day in dates:
         for page_id in page_ids:
-            published = pages[page_id].get(day)
+            published = evidence.pages[page_id].get(day)
             if published is None:
-                maximum += cutoffs[day]
+                maximum += evidence.cutoffs[day]
                 continue
             observed_total += published
             observed_page_days += 1
             minimum += max(0, published - 99)
             maximum += published
     successful_days = len(dates)
-    normalization = 7 / successful_days
     return WindowTraffic(
         observed_total=observed_total,
         observed_page_days=observed_page_days,
         successful_days=successful_days,
-        seven_day_equivalent=observed_total * normalization,
-        minimum=minimum * normalization,
-        maximum=maximum * normalization,
+        conservative_observed_minimum=minimum,
+        conservative_observed_maximum=maximum,
+        seven_day_equivalent=observed_total * 7 / successful_days,
+        minimum=minimum * 7 / successful_days,
+        maximum=maximum * 7 / successful_days,
     )
 
 
 def _direction(previous: WindowTraffic, current: WindowTraffic) -> Direction:
-    if current.minimum > previous.maximum:
+    if (
+        current.conservative_observed_minimum * previous.successful_days
+        > previous.conservative_observed_maximum * current.successful_days
+    ):
         return "robust_growth"
-    if current.maximum < previous.minimum:
+    if (
+        current.conservative_observed_maximum * previous.successful_days
+        < previous.conservative_observed_minimum * current.successful_days
+    ):
         return "robust_shrinking"
     return "uncertain_direction"
