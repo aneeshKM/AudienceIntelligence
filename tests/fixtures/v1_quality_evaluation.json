@@ -1,28 +1,28 @@
 {
   "schema_version": "1.0",
   "articles": [
-    {"page_id": 1, "accepted": true, "commercially_relevant": true},
-    {"page_id": 2, "accepted": true, "commercially_relevant": true},
-    {"page_id": 3, "accepted": true, "commercially_relevant": true},
-    {"page_id": 4, "accepted": true, "commercially_relevant": true},
-    {"page_id": 5, "accepted": true, "commercially_relevant": false},
-    {"page_id": 6, "accepted": false, "commercially_relevant": false}
+    {"page_id": 1, "commercially_relevant": true},
+    {"page_id": 2, "commercially_relevant": true},
+    {"page_id": 3, "commercially_relevant": true},
+    {"page_id": 4, "commercially_relevant": true},
+    {"page_id": 5, "commercially_relevant": false},
+    {"page_id": 6, "commercially_relevant": false}
   ],
   "clusters": [
-    {"name": "Home Espresso Explorers", "accepted": true, "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
-    {"name": "Recreational Trail Runners", "accepted": true, "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
-    {"name": "Compact Garden Growers", "accepted": true, "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
-    {"name": "Indie Beauty Shoppers", "accepted": true, "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
-    {"name": "Weekend Bread Bakers", "accepted": true, "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
-    {"name": "Unrelated News Chain", "accepted": false, "has_unrelated_member": true, "tragedy": false, "violent_crime": false},
-    {"name": "Disaster Coverage", "accepted": false, "has_unrelated_member": false, "tragedy": true, "violent_crime": false},
-    {"name": "Violent Crime Coverage", "accepted": false, "has_unrelated_member": false, "tragedy": false, "violent_crime": true}
+    {"component_id": 1, "name": "Home Espresso Explorers", "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
+    {"component_id": 2, "name": "Recreational Trail Runners", "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
+    {"component_id": 3, "name": "Compact Garden Growers", "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
+    {"component_id": 4, "name": "Indie Beauty Shoppers", "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
+    {"component_id": 5, "name": "Weekend Bread Bakers", "has_unrelated_member": false, "tragedy": false, "violent_crime": false},
+    {"component_id": 6, "name": "Unrelated News Chain", "has_unrelated_member": true, "tragedy": false, "violent_crime": false},
+    {"component_id": 7, "name": "Disaster Coverage", "has_unrelated_member": false, "tragedy": true, "violent_crime": false},
+    {"component_id": 8, "name": "Violent Crime Coverage", "has_unrelated_member": false, "tragedy": false, "violent_crime": true}
   ],
   "top_audience_editor_reviews": [
-    {"rank": 1, "coherent": true, "name_useful": true, "brand_useful": true},
-    {"rank": 2, "coherent": true, "name_useful": true, "brand_useful": true},
-    {"rank": 3, "coherent": true, "name_useful": true, "brand_useful": true},
-    {"rank": 4, "coherent": true, "name_useful": true, "brand_useful": true},
-    {"rank": 5, "coherent": true, "name_useful": false, "brand_useful": true}
+    {"rank": 1, "audience_name": "Home Espresso Explorers", "reviewer": "V1 editor", "reviewed_at": "2026-07-16", "coherent": true, "name_useful": true, "brand_useful": true},
+    {"rank": 2, "audience_name": "Recreational Trail Runners", "reviewer": "V1 editor", "reviewed_at": "2026-07-16", "coherent": true, "name_useful": true, "brand_useful": true},
+    {"rank": 3, "audience_name": "Compact Garden Growers", "reviewer": "V1 editor", "reviewed_at": "2026-07-16", "coherent": true, "name_useful": true, "brand_useful": true},
+    {"rank": 4, "audience_name": "Indie Beauty Shoppers", "reviewer": "V1 editor", "reviewed_at": "2026-07-16", "coherent": true, "name_useful": true, "brand_useful": true},
+    {"rank": 5, "audience_name": "Weekend Bread Bakers", "reviewer": "V1 editor", "reviewed_at": "2026-07-16", "coherent": true, "name_useful": false, "brand_useful": true}
   ]
 }

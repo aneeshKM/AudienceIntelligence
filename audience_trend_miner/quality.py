@@ -14,24 +14,26 @@ FROZEN_EVALUATION_SCHEMA: dict[str, object] = {
         "schema_version": {"const": "1.0"},
         "articles": {"type": "array", "minItems": 1, "items": {
             "type": "object", "additionalProperties": False,
-            "required": ["page_id", "accepted", "commercially_relevant"],
+            "required": ["page_id", "commercially_relevant"],
             "properties": {"page_id": {"type": "integer", "minimum": 1},
-                           "accepted": {"type": "boolean"},
                            "commercially_relevant": {"type": "boolean"}},
         }},
         "clusters": {"type": "array", "minItems": 1, "items": {
             "type": "object", "additionalProperties": False,
-            "required": ["name", "accepted", "has_unrelated_member", "tragedy", "violent_crime"],
+            "required": ["component_id", "name", "has_unrelated_member", "tragedy", "violent_crime"],
             "properties": {"name": {"type": "string", "minLength": 1},
-                           "accepted": {"type": "boolean"},
+                           "component_id": {"type": "integer", "minimum": 1},
                            "has_unrelated_member": {"type": "boolean"},
                            "tragedy": {"type": "boolean"},
                            "violent_crime": {"type": "boolean"}},
         }},
         "top_audience_editor_reviews": {"type": "array", "minItems": 5,
             "maxItems": 5, "items": {"type": "object", "additionalProperties": False,
-                "required": ["rank", "coherent", "name_useful", "brand_useful"],
+                "required": ["rank", "audience_name", "reviewer", "reviewed_at", "coherent", "name_useful", "brand_useful"],
                 "properties": {"rank": {"type": "integer", "minimum": 1, "maximum": 5},
+                               "audience_name": {"type": "string", "minLength": 1},
+                               "reviewer": {"type": "string", "minLength": 1},
+                               "reviewed_at": {"type": "string", "format": "date"},
                                "coherent": {"type": "boolean"},
                                "name_useful": {"type": "boolean"},
                                "brand_useful": {"type": "boolean"}}}},
@@ -52,22 +54,46 @@ class PublicationQualityResult:
     total_size_basis_points: int
 
 
-def evaluate_frozen_fixture(fixture: object) -> FrozenEvaluationResult:
-    """Measure the immutable V1 editor-labelled evaluation set."""
+def evaluate_frozen_fixture(
+    fixture: object,
+    audit: dict[str, object],
+    portfolio: dict[str, object],
+) -> FrozenEvaluationResult:
+    """Compare produced V1 decisions with the immutable editor-labelled set."""
     jsonschema.validate(fixture, FROZEN_EVALUATION_SCHEMA)
     assert isinstance(fixture, dict)
-    accepted_articles = [item for item in fixture["articles"] if item["accepted"]]
+    labels = {item["page_id"]: item for item in fixture["articles"]}
+    produced_ids = {item["page_id"] for item in audit["article_classifications"]}
+    if produced_ids != set(labels):
+        raise ValueError("produced article decisions do not match the frozen fixture")
+    accepted_articles = [
+        labels[item["page_id"]]
+        for item in audit["article_classifications"]
+        if item["accepted"]
+    ]
     if not accepted_articles:
         raise ValueError("evaluation fixture must contain accepted articles")
     relevance = sum(item["commercially_relevant"] for item in accepted_articles) / len(accepted_articles)
-    for cluster in fixture["clusters"]:
-        if cluster["accepted"] and cluster["has_unrelated_member"]:
+    accepted_components = {
+        item["source_component_id"]
+        for item in audit["cluster_refinement"]["accepted"]
+    }
+    cluster_labels = {item["component_id"]: item for item in fixture["clusters"]}
+    for component_id in accepted_components:
+        if component_id not in cluster_labels:
+            raise ValueError(f"accepted component {component_id} has no frozen label")
+        cluster = cluster_labels[component_id]
+        if cluster["has_unrelated_member"]:
             raise ValueError(f"accepted cluster has an unrelated member: {cluster['name']}")
-        if cluster["accepted"] and (cluster["tragedy"] or cluster["violent_crime"]):
+        if cluster["tragedy"] or cluster["violent_crime"]:
             raise ValueError(f"accepted cluster fails the violent-crime/tragedy gate: {cluster['name']}")
+    reviews = sorted(fixture["top_audience_editor_reviews"], key=lambda item: item["rank"])
+    produced_top_five = [item["name"] for item in portfolio["audiences"][:5]]
+    if produced_top_five != [item["audience_name"] for item in reviews]:
+        raise ValueError("editor reviews do not match the produced top-five audiences")
     approvals = sum(
         review["coherent"] and review["name_useful"] and review["brand_useful"]
-        for review in fixture["top_audience_editor_reviews"]
+        for review in reviews
     )
     if relevance < 0.8:
         raise ValueError("commercial relevance is below 80%")

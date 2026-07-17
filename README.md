@@ -123,7 +123,8 @@ cover argument and date wiring, adapter selection, and Candidate Universe aborts
 
 The frozen V1 evaluation set lives at
 `tests/fixtures/v1_quality_evaluation.json`. `audience_trend_miner.quality`
-validates its editor labels and enforces the 80% commercial-relevance threshold,
-cluster coherence and safety gates, and four-of-five top-audience approval gate.
+matches produced decisions to its editor labels and enforces the 80%
+commercial-relevance threshold, cluster coherence and safety gates, and
+four-of-five top-audience approval gate with recorded reviewer provenance.
 The same module independently verifies exact Size Index allocation and complete
 alias-to-final-membership lineage in published audit data.

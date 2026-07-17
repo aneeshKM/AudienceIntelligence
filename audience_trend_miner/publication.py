@@ -15,6 +15,7 @@ from audience_trend_miner.classification import ArticleClassification, ArticleCl
 from audience_trend_miner.clustering import CandidateClusteringResult
 from audience_trend_miner.refinement import ClusterRefinementResult
 from audience_trend_miner.portfolio import PortfolioAudience, PortfolioResult
+from audience_trend_miner.quality import verify_publication_quality
 from audience_trend_miner.trends import TrendDecision, TrendQualificationResult
 from audience_trend_miner.wikimedia import AnalysisWindows, WikimediaAttentionResult
 
@@ -37,6 +38,14 @@ class PublicationInput:
     configuration: dict[str, str]
     run_id: str | None
     portfolio: PortfolioResult = field(default_factory=lambda: PortfolioResult((), ()))
+
+
+@dataclass(frozen=True)
+class DegradationSummary:
+    status: str
+    degraded: bool
+    failure_count: int
+    failure_reasons: tuple[str, ...]
 
 
 def publish_run(publication: PublicationInput) -> Path:
@@ -89,9 +98,7 @@ def _verify_existing_publication(
 
 def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
     failures = _run_failure_records(publication)
-    degraded = bool(failures)
-    status = "degraded" if degraded else "success"
-    failure_reasons = [_failure_summary(item) for item in failures]
+    degradation = _degradation_summary(failures)
     manifest = {
         "as_of_argument": (
             publication.as_of_argument.isoformat()
@@ -109,25 +116,19 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         },
         "configuration": publication.configuration,
         "run_id": publication.run_id,
-        "status": status,
-        "degraded": degraded,
-        "failure_count": len(failures),
-        "failure_reasons": failure_reasons,
+        **_degradation_record(degradation),
     }
     portfolio = {
         "schema_version": "1.0",
         "as_of": publication.as_of.isoformat(),
-        "status": status,
-        "degraded": degraded,
-        "failure_count": len(failures),
-        "failure_reasons": failure_reasons,
+        **_degradation_record(degradation),
         "audiences": [_portfolio_record(item) for item in publication.portfolio.audiences],
     }
     audit = {
         "schema_version": "1.0",
-        "status": status,
-        "degraded": degraded,
-        "failure_count": len(failures),
+        "status": degradation.status,
+        "degraded": degradation.degraded,
+        "failure_count": degradation.failure_count,
         "run": manifest,
         "decisions": [
             _decision_audit_record(decision, publication.classification)
@@ -151,8 +152,12 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
         "failures": failures,
     }
     audit.update(_attention_audit_data(publication.attention))
-    audit["failures"] = failures
-    audit["degraded"] = degraded
+    quality = verify_publication_quality(audit, portfolio)
+    audit["quality_checks"] = {
+        "traced_page_ids": list(quality.traced_page_ids),
+        "total_size_basis_points": quality.total_size_basis_points,
+    }
+    _validate("manifest.schema.json", manifest)
     _validate("portfolio.schema.json", portfolio)
     _validate("audit.schema.json", audit)
 
@@ -243,8 +248,6 @@ def _attention_audit_data(attention: WikimediaAttentionResult) -> dict[str, obje
             }
             for article in attention.canonical_articles
         ],
-        "failures": [asdict(failure) for failure in attention.failures],
-        "degraded": attention.degraded,
     }
 
 
@@ -285,6 +288,27 @@ def _classification_failure_records(
 
 def _failure_summary(failure: dict[str, object]) -> str:
     return f"{failure['operation']}: {failure['subject']} — {failure['reason']}"
+
+
+def _degradation_summary(
+    failures: list[dict[str, object]],
+) -> DegradationSummary:
+    degraded = bool(failures)
+    return DegradationSummary(
+        "degraded" if degraded else "success",
+        degraded,
+        len(failures),
+        tuple(_failure_summary(item) for item in failures),
+    )
+
+
+def _degradation_record(summary: DegradationSummary) -> dict[str, object]:
+    return {
+        "status": summary.status,
+        "degraded": summary.degraded,
+        "failure_count": summary.failure_count,
+        "failure_reasons": list(summary.failure_reasons),
+    }
 
 
 def _refinement_failure_records(

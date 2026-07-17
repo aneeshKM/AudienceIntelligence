@@ -7,6 +7,8 @@ from pathlib import Path
 
 from audience_trend_miner.portfolio import build_portfolio
 from audience_trend_miner.publication import publish_run
+from audience_trend_miner.classification import classify_articles
+from audience_trend_miner.clustering import FrozenEmbeddingAdapter, form_candidate_clusters
 from audience_trend_miner.refinement import (
     AcceptedAudience,
     ClusterRefinementResult,
@@ -14,7 +16,9 @@ from audience_trend_miner.refinement import (
     RefinementAttempt,
 )
 from audience_trend_miner.wikimedia import WikimediaAttentionResult
+from audience_trend_miner.trends import qualify_trends
 from tests.test_article_classification import ScriptedGenerator
+from tests.test_article_classification import judgment
 from tests.test_publication import _qualified_article, publication_input
 
 
@@ -78,7 +82,6 @@ class PortfolioTransformationTest(unittest.TestCase):
             ScriptedGenerator(*responses),
             sleep=lambda _: None,
         )
-
         self.assertEqual(len(result.audiences), 10)
         self.assertEqual([item.source_component_id for item in result.audiences], list(range(1, 11)))
         self.assertEqual(sum(item.size_basis_points for item in result.audiences), 10_000)
@@ -96,7 +99,6 @@ class PortfolioTransformationTest(unittest.TestCase):
             ScriptedGenerator(),
             sleep=lambda _: None,
         )
-
         self.assertEqual(result.audiences, ())
         self.assertEqual(result.assessments, ())
 
@@ -113,21 +115,34 @@ class PortfolioTransformationTest(unittest.TestCase):
             )),
             sleep=lambda _: None,
         )
+        qualification = qualify_trends(articles)
+        classification = classify_articles(
+            articles, ScriptedGenerator(judgment(), judgment()), sleep=lambda _: None
+        )
+        clustering = form_candidate_clusters(
+            articles, FrozenEmbeddingAdapter(((1.0, 0.0), (1.0, 0.0)))
+        )
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             published = publish_run(publication_input(
                 Path(temporary_directory),
                 attention=WikimediaAttentionResult((), articles, ()),
+                qualification=qualification,
+                classification=classification,
+                clustering=clustering,
                 refinement=refined,
                 portfolio=result,
             ))
             portfolio_text = (published / "portfolio.json").read_text()
             portfolio = json.loads(portfolio_text)
+            audit = json.loads((published / "audit.json").read_text())
             report = (published / "report.html").read_text()
 
         audience = portfolio["audiences"][0]
         self.assertEqual(audience["source_component_id"], 1)
         self.assertEqual(audience["page_ids"], [1, 2])
+        self.assertEqual(audit["quality_checks"]["traced_page_ids"], [1, 2])
+        self.assertEqual(audit["quality_checks"]["total_size_basis_points"], 10_000)
         self.assertEqual(audience["estimated_size_index"], 100.0)
         self.assertIn(
             '"estimated_size_index": 100.00',

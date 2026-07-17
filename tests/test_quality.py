@@ -16,7 +16,22 @@ FIXTURE = Path(__file__).with_name("fixtures") / "v1_quality_evaluation.json"
 
 class FrozenEvaluationTest(unittest.TestCase):
     def test_v1_fixture_meets_all_frozen_quality_gates(self) -> None:
-        result = evaluate_frozen_fixture(json.loads(FIXTURE.read_text()))
+        fixture = json.loads(FIXTURE.read_text())
+        audit = {
+            "article_classifications": [
+                {"page_id": page_id, "accepted": page_id <= 5}
+                for page_id in range(1, 7)
+            ],
+            "cluster_refinement": {"accepted": [
+                {"source_component_id": component_id}
+                for component_id in range(1, 6)
+            ]},
+        }
+        portfolio = {"audiences": [
+            {"name": item["audience_name"]}
+            for item in fixture["top_audience_editor_reviews"]
+        ]}
+        result = evaluate_frozen_fixture(fixture, audit, portfolio)
 
         self.assertEqual(result.commercial_relevance, 0.8)
         self.assertEqual(result.approved_top_five, 4)
@@ -25,9 +40,14 @@ class FrozenEvaluationTest(unittest.TestCase):
     def test_rejects_an_accepted_unsafe_or_incoherent_cluster(self) -> None:
         fixture = json.loads(FIXTURE.read_text())
         fixture["clusters"][0]["has_unrelated_member"] = True
+        audit = {
+            "article_classifications": [{"page_id": page_id, "accepted": page_id <= 5} for page_id in range(1, 7)],
+            "cluster_refinement": {"accepted": [{"source_component_id": component_id} for component_id in range(1, 6)]},
+        }
+        portfolio = {"audiences": [{"name": item["audience_name"]} for item in fixture["top_audience_editor_reviews"]]}
 
         with self.assertRaisesRegex(ValueError, "unrelated member"):
-            evaluate_frozen_fixture(fixture)
+            evaluate_frozen_fixture(fixture, audit, portfolio)
 
 
 class PublicationQualityTest(unittest.TestCase):

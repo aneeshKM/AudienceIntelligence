@@ -4,7 +4,7 @@
   "title": "Audience Trend Miner Audit",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "status", "degraded", "failure_count", "run", "decisions", "qualified_signals", "article_classifications", "candidate_clustering", "cluster_refinement", "portfolio_assessments", "portfolio_calculations", "failures"],
+  "required": ["schema_version", "status", "degraded", "failure_count", "run", "decisions", "qualified_signals", "article_classifications", "candidate_clustering", "cluster_refinement", "portfolio_assessments", "portfolio_calculations", "failures", "quality_checks"],
   "properties": {
     "schema_version": {"const": "1.0"},
     "status": {"enum": ["success", "degraded", "failed"]},
@@ -30,6 +30,15 @@
     "failures": {
       "type": "array",
       "items": {"$ref": "#/$defs/failure"}
+    },
+    "quality_checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traced_page_ids", "total_size_basis_points"],
+      "properties": {
+        "traced_page_ids": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "total_size_basis_points": {"enum": [0, 10000]}
+      }
     },
     "raw_candidate_titles": {
       "type": "array",
