@@ -7,6 +7,7 @@ import numpy as np
 
 from audience_trend_miner.v2.semantic_audience_formation import SelectedCategoryPage
 from audience_trend_miner.v2.semantic_audience_formation.clustering import (
+    SubdivisionPolicy,
     form_preliminary_clusters,
 )
 from audience_trend_miner.v2.semantic_audience_formation.embeddings import (
@@ -30,6 +31,79 @@ def page(page_id: int, title: str, category: str) -> SelectedCategoryPage:
 
 
 class PreliminaryClusteringTest(unittest.TestCase):
+    def test_rejects_a_page_that_cannot_fit_the_guard_without_truncation(self) -> None:
+        pages = (
+            SelectedCategoryPage(1, "One", "x" * 500, ("Shared",)),
+            page(2, "Two", "Shared"),
+        )
+        vectors = ((1.0, 0.0), (1.0, 0.0))
+
+        with self.assertRaisesRegex(
+            V2ContractError,
+            "Canonical Page 1 exceeds the model-input token guard",
+        ):
+            form_preliminary_clusters(
+                pages,
+                SequentialEmbeddingAdapter([vectors, vectors]),
+                threshold=0.75,
+                subdivision_policy=SubdivisionPolicy(
+                    max_input_tokens=250,
+                    fixed_prompt_tokens=0,
+                    stricter_threshold_step=0.1,
+                ),
+            )
+
+    def test_subdivides_only_oversized_components_without_dropping_members(self) -> None:
+        pages = tuple(
+            page(index, f"Page {index}", "Shared") for index in range(1, 7)
+        )
+        pair_vectors = (
+            (1.0, 0.0),
+            (1.0, 0.0),
+            (0.8, 0.6),
+            (0.8, 0.6),
+            (0.0, 1.0),
+            (0.0, 1.0),
+        )
+
+        artifact = form_preliminary_clusters(
+            pages,
+            SequentialEmbeddingAdapter([pair_vectors, pair_vectors]),
+            threshold=0.75,
+            subdivision_policy=SubdivisionPolicy(
+                max_input_tokens=250,
+                fixed_prompt_tokens=0,
+                stricter_threshold_step=0.1,
+            ),
+        )
+
+        clusters = [cluster.page_ids for cluster in artifact.preliminary_clusters]
+        self.assertCountEqual(clusters, [(1, 2), (3, 4), (5, 6)])
+        self.assertEqual(
+            sorted(page_id for cluster in clusters for page_id in cluster),
+            list(range(1, 7)),
+        )
+        self.assertEqual(artifact.singleton_count, 0)
+        self.assertEqual(artifact.subdivision_policy.method, "stricter-boundary")
+        self.assertEqual(
+            artifact.subdivision_policy.token_estimation,
+            "utf8-bytes-upper-bound",
+        )
+        repeated = form_preliminary_clusters(
+            tuple(reversed(pages)),
+            SequentialEmbeddingAdapter([pair_vectors, pair_vectors]),
+            threshold=0.75,
+            subdivision_policy=SubdivisionPolicy(
+                max_input_tokens=250,
+                fixed_prompt_tokens=0,
+                stricter_threshold_step=0.1,
+            ),
+        )
+        self.assertEqual(
+            [cluster.page_ids for cluster in artifact.preliminary_clusters],
+            [cluster.page_ids for cluster in repeated.preliminary_clusters],
+        )
+
     def test_forms_and_ranks_minimal_clusters_from_dual_representations(self) -> None:
         pages = (
             page(7, "Gamma Two", "Gamma"),
@@ -101,8 +175,12 @@ class PreliminaryClusteringTest(unittest.TestCase):
         artifact = form_preliminary_clusters(pages, adapter, threshold=0.9)
 
         self.assertEqual(adapter.batch_sizes, [257, 257])
-        self.assertEqual(len(artifact.preliminary_clusters), 1)
-        self.assertEqual(len(artifact.preliminary_clusters[0].members), 257)
+        retained_page_ids = sorted(
+            page_id
+            for cluster in artifact.preliminary_clusters
+            for page_id in cluster.page_ids
+        )
+        self.assertEqual(retained_page_ids, list(range(1, 258)))
         record = artifact.record()
         self.assertNotIn("embeddings", record)
         self.assertNotIn("similarity_matrix", record)

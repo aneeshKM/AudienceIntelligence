@@ -87,7 +87,9 @@ def execute_preliminary_clustering(
             message=(
                 f"formed {len(result.preliminary_clusters)} Preliminary Clusters; "
                 f"discarded {result.singleton_count} singleton components; "
-                f"using model {result.embedding_model!r}"
+                f"using model {result.embedding_model!r}, threshold {result.threshold:g}, "
+                f"and {result.subdivision_policy.max_input_tokens}-token "
+                f"{result.subdivision_policy.method} guard"
             ),
             progress=BoundedProgress(page_count, max(page_count, 1)),
         )

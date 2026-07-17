@@ -87,6 +87,9 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
         FrozenEmbeddingAdapter,
         SentenceTransformerEmbeddingAdapter,
     )
+    from audience_trend_miner.v2.semantic_audience_formation.clustering import (
+        DEFAULT_SIMILARITY_THRESHOLD,
+    )
 
     parser = argparse.ArgumentParser(
         prog="audience-trend-miner v2-semantic-audience-formation"
@@ -95,7 +98,15 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--wikimedia-evidence", type=Path)
     parser.add_argument("--embedding-fixture", type=Path)
-    parser.add_argument("--similarity-threshold", type=float)
+    parser.add_argument(
+        "--similarity-threshold",
+        type=float,
+        default=os.environ.get("AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD"),
+        help=(
+            "inclusive Combined Similarity boundary; the selected production "
+            f"value is {DEFAULT_SIMILARITY_THRESHOLD}"
+        ),
+    )
     parser.add_argument(
         "--embedding-model",
         default=os.environ.get(

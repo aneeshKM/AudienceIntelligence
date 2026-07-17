@@ -114,6 +114,7 @@ class SentenceTransformer:
             )
             environment = os.environ.copy()
             environment["TEST_ENCODER_LOG"] = str(configuration_log)
+            environment["AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD"] = "0.76"
             environment["PYTHONPATH"] = os.pathsep.join(
                 filter(None, (str(fake_package_root), environment.get("PYTHONPATH")))
             )
@@ -121,8 +122,6 @@ class SentenceTransformer:
             completed = run_stage(
                 output_dir,
                 extra_arguments=(
-                    "--similarity-threshold",
-                    "0.9",
                     "--embedding-model",
                     "local/override-model",
                     "--embedding-batch-size",
@@ -138,6 +137,8 @@ class SentenceTransformer:
                 ["select-categories", "form-preliminary-clusters"],
             )
             self.assertIn("using model 'local/override-model'", events[1]["message"])
+            self.assertIn("threshold 0.76", events[1]["message"])
+            self.assertIn("16384-token stricter-boundary guard", events[1]["message"])
             configurations = [
                 json.loads(line) for line in configuration_log.read_text().splitlines()
             ]

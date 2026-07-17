@@ -118,6 +118,17 @@ Inference is batched and similarity is vectorized in memory. Raw embedding
 vectors and the complete pairwise similarity matrix are not included in stage
 artifacts or progress logs.
 
+The selected production Combined Similarity threshold is `0.76`; configure it
+with `AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD=0.76` or pass the equivalent CLI
+option. Preliminary components whose adjudication evidence exceeds the
+16,384-token input guard are subdivided within their existing component by
+raising the semantic boundary in deterministic `0.02` steps. Input size uses a
+conservative UTF-8-byte token upper bound with 2,048 tokens reserved for the
+fixed adjudication prompt. Members are never truncated or moved across an
+original connected-component boundary. See the
+[production threshold experiment](docs/research/semantic-formation-threshold.md)
+for the evidence and rationale.
+
 For local development, copy `.env.example` to `.env` and set both values there:
 
 ```dotenv
