@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The project declares Groq SDK version `>=1.5,<2`, and the generator constructs one reusable client using the supplied or environment API key, a 60-second timeout, no SDK retries, and the SDK's standard endpoint.
 - [ ] The generator accepts an optional injected SDK client so unit tests make no network requests and do not patch SDK internals.
