@@ -51,6 +51,14 @@ progress and can emit schema-versioned structured JSON events containing the run
 ID, sequence, timestamp, module, operation, level, message, and optional bounded
 progress.
 
+Give each V2 module an explicit package under `audience_trend_miner/v2/`, with a
+small public interface and only as many internal files as its implementation
+requires. Keep genuinely cross-module run, artifact, progress, validation, and
+atomic-write primitives in `audience_trend_miner/v2/shared/`. Module adapters and
+schemas remain owned by their module; tests mirror module ownership under
+`tests/v2/`. V2 import paths move cleanly to these packages without permanent
+top-level compatibility wrappers.
+
 Run Publication atomically publishes `portfolio.json`, `audit.json`, and
 `manifest.json`. `portfolio.json` is the UI-facing structured contract; Run
 Publication does not render a static report.

@@ -90,6 +90,12 @@ modules in dependency order, resuming from the first incomplete module. Small
 stage-specific CLI commands expose the same module interfaces for manual runs,
 experiments, and recovery; they do not introduce a second implementation.
 
+Each module has an explicit package under `audience_trend_miner/v2/` and exposes
+a small public interface. Shared run, artifact, progress, validation, and
+atomic-write primitives live in `audience_trend_miner/v2/shared/`; adapters and
+schemas stay with their owning module. Internal files are split only when the
+implementation requires it, and tests mirror module ownership under `tests/v2/`.
+
 ## 4. Windows and partial availability
 
 The CLI continues to accept `--as-of YYYY-MM-DD`. Derive two adjacent nominal

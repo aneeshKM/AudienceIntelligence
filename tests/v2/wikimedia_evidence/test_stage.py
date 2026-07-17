@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 
-FIXTURE = Path(__file__).with_name("fixtures") / "v2_wikimedia_evidence.json"
+FIXTURE = Path(__file__).parents[1] / "fixtures" / "v2_wikimedia_evidence.json"
 
 
 class V2WikimediaEvidenceCliTest(unittest.TestCase):

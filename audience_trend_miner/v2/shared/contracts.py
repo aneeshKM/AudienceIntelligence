@@ -44,8 +44,8 @@ class ProgressEvent:
     schema_version: str = PROGRESS_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        _safe_identifier(self.run_id, "run_id")
-        _safe_identifier(self.module, "module")
+        validate_identifier(self.run_id, "run_id")
+        validate_identifier(self.module, "module")
         if self.sequence <= 0:
             raise V2ContractError("event sequence must be positive")
         if self.level not in {"info", "warning", "error"}:
@@ -55,7 +55,7 @@ class ProgressEvent:
         record = asdict(self)
         if self.progress is None:
             record.pop("progress")
-        _validate("v2-progress-event.schema.json", record)
+        _validate("progress-event.schema.json", record)
         return record
 
 
@@ -113,7 +113,7 @@ def execute_fixture_stage(
     interrupt_before_completion: bool = False,
 ) -> Path:
     """Exercise the shared V2 stage boundary with deterministic domain data."""
-    _safe_identifier(run_id, "run_id")
+    validate_identifier(run_id, "run_id")
     fixture = _load_fixture(fixture_path)
     stage = fixture["stage"]
     run_directory = output_root / run_id
@@ -133,7 +133,7 @@ def execute_fixture_stage(
         "payload": fixture["payload"],
     }
     validate_artifact(artifact, run_id=run_id, stage=stage)
-    _atomic_write_json(
+    atomic_write_json(
         artifact_path,
         artifact,
         interrupt_before_replace=interrupt_before_completion,
@@ -151,7 +151,7 @@ def record_run_configuration(
     path = run_directory / RUN_CONFIGURATION_NAME
     if not path.exists():
         try:
-            _atomic_write_json(path, record, refuse_replace=True)
+            atomic_write_json(path, record, refuse_replace=True)
         except FileExistsError:
             pass
     try:
@@ -179,7 +179,7 @@ def validate_artifact(
     artifact: object, *, run_id: str, stage: str
 ) -> None:
     try:
-        _validate("v2-stage-artifact.schema.json", artifact)
+        _validate("stage-artifact.schema.json", artifact)
     except jsonschema.ValidationError as error:
         raise V2ContractError(f"artifact is schema-invalid: {error.message}") from error
     assert isinstance(artifact, dict)
@@ -220,11 +220,11 @@ def _load_fixture(path: Path) -> dict[str, object]:
         raise V2ContractError("fixture has an invalid shape")
     if fixture["schema_version"] != "1.0" or not isinstance(fixture["payload"], dict):
         raise V2ContractError("fixture has an incompatible schema")
-    _safe_identifier(fixture["stage"], "stage")
+    validate_identifier(fixture["stage"], "stage")
     return fixture
 
 
-def _safe_identifier(value: object, name: str) -> str:
+def validate_identifier(value: object, name: str) -> str:
     if (
         not isinstance(value, str)
         or not value
@@ -235,7 +235,7 @@ def _safe_identifier(value: object, name: str) -> str:
     return value
 
 
-def _atomic_write_json(
+def atomic_write_json(
     path: Path,
     content: object,
     *,
@@ -263,5 +263,10 @@ def _atomic_write_json(
 
 
 def _validate(schema_name: str, instance: object) -> None:
-    schema = json.loads((SCHEMA_DIRECTORY / schema_name).read_text(encoding="utf-8"))
+    validate_schema(SCHEMA_DIRECTORY / schema_name, instance)
+
+
+def validate_schema(schema_path: Path, instance: object) -> None:
+    """Validate an instance against an owning module's packaged JSON schema."""
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
     jsonschema.validate(instance, schema)

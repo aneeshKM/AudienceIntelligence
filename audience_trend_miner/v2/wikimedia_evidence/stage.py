@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Mapping, Protocol
 
-from audience_trend_miner.evidence_jobs import (
+from audience_trend_miner.v2.wikimedia_evidence.jobs import (
     CompletedEvidence,
     EvidenceJob,
     EvidenceJobExecution,
@@ -16,29 +16,30 @@ from audience_trend_miner.evidence_jobs import (
     COUNTRY_DAY_OPERATION,
     METADATA_BATCH_OPERATION,
 )
-from audience_trend_miner.wikimedia import (
+from audience_trend_miner.v2.wikimedia_evidence.adapters import (
     CountryTopPagesResponse,
     HttpWikimediaAdapter,
     WikimediaPermanentError,
 )
 from audience_trend_miner.trends import deterministic_exclusion_reason
 
-from audience_trend_miner.v2_contracts import (
+from audience_trend_miner.v2.shared import (
     ARTIFACT_SCHEMA_VERSION,
     BoundedProgress,
     ProgressEvent,
     ProgressSink,
     V2ContractError,
-    _atomic_write_json,
-    _safe_identifier,
-    _validate,
+    atomic_write_json,
     record_run_configuration,
     validate_artifact,
+    validate_identifier,
+    validate_schema,
 )
 
 
 STAGE = "wikimedia-evidence"
 MINIMUM_SUCCESSFUL_DAYS = 4
+SCHEMA_PATH = Path(__file__).with_name("schemas") / "wikimedia-evidence.schema.json"
 
 
 class CountryTopPagesAdapter(Protocol):
@@ -55,7 +56,7 @@ def acquire_country_days(
     workers: int = 4,
 ) -> tuple[TerminalEvidence, ...]:
     """Acquire independently resumable US country-day Analytics evidence."""
-    _safe_identifier(run_id, "run_id")
+    validate_identifier(run_id, "run_id")
     if len(days) != 14 or any(
         later != earlier + timedelta(days=1)
         for earlier, later in zip(days, days[1:])
@@ -271,12 +272,12 @@ def execute_wikimedia_evidence(
         "completion": {"status": "complete", "minimum_successful_days_per_window": MINIMUM_SUCCESSFUL_DAYS},
     }
     artifact = {"schema_version": ARTIFACT_SCHEMA_VERSION, "run_id": run_id, "stage": STAGE, "status": "complete", "payload": payload}
-    _validate("v2-wikimedia-evidence.schema.json", payload)
+    validate_schema(SCHEMA_PATH, payload)
     validate_artifact(artifact, run_id=run_id, stage=STAGE)
     artifact_path = output_root / run_id / f"{STAGE}.json"
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     store.reserve_publication_path(run_id, str(artifact_path))
-    _atomic_write_json(artifact_path, artifact)
+    atomic_write_json(artifact_path, artifact)
     store.mark_publication_complete(run_id, str(artifact_path))
     progress_sink(
         ProgressEvent(
@@ -301,7 +302,7 @@ def execute_wikimedia_evidence_fixture(
     fixture_path: Path,
     progress_sink: ProgressSink,
 ) -> Path:
-    _safe_identifier(run_id, "run_id")
+    validate_identifier(run_id, "run_id")
     fixture = _load_fixture(fixture_path)
     previous_start = as_of_date - timedelta(days=15)
     previous_end = as_of_date - timedelta(days=9)
@@ -429,10 +430,10 @@ def execute_wikimedia_evidence_fixture(
         "status": "complete",
         "payload": payload,
     }
-    _validate("v2-wikimedia-evidence.schema.json", payload)
+    validate_schema(SCHEMA_PATH, payload)
     validate_artifact(artifact, run_id=run_id, stage=STAGE)
     artifact_path = run_directory / f"{STAGE}.json"
-    _atomic_write_json(artifact_path, artifact)
+    atomic_write_json(artifact_path, artifact)
     progress_sink(
         ProgressEvent(
             run_id=run_id,

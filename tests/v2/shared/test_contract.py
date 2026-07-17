@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 
-FIXTURE = Path(__file__).with_name("fixtures") / "v2_contract_stage.json"
+FIXTURE = Path(__file__).parents[1] / "fixtures" / "v2_contract_stage.json"
 
 
 def invoke_stage(output_dir: str, *arguments: str) -> subprocess.CompletedProcess[str]:

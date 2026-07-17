@@ -6,14 +6,17 @@ import tempfile
 from pathlib import Path
 import json
 
-from audience_trend_miner.evidence_jobs import (
+from audience_trend_miner.v2.wikimedia_evidence.jobs import (
     CompletedEvidence,
     EvidenceJobStore,
     FailedEvidence,
 )
 from audience_trend_miner.resumable_wikimedia import acquire_resumable_wikimedia_attention
 from audience_trend_miner.wikimedia import AnalysisWindows, FixtureWikimediaAdapter
-from audience_trend_miner.v2_wikimedia_evidence import acquire_country_days, execute_wikimedia_evidence
+from audience_trend_miner.v2.wikimedia_evidence import (
+    acquire_country_days,
+    execute_wikimedia_evidence,
+)
 from tests.postgres import test_database_url
 
 

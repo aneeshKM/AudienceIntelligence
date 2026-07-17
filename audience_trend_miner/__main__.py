@@ -25,7 +25,7 @@ def main() -> int:
 
 
 def _wikimedia_evidence_main(arguments: list[str]) -> int:
-    from audience_trend_miner.v2_wikimedia_evidence import (
+    from audience_trend_miner.v2.wikimedia_evidence import (
         execute_wikimedia_evidence,
         execute_wikimedia_evidence_fixture,
     )
@@ -45,8 +45,10 @@ def _wikimedia_evidence_main(arguments: list[str]) -> int:
     if parsed.fixture is None:
         if not parsed.database_url:
             parser.error("--database-url or DATABASE_URL is required without --fixture")
-        from audience_trend_miner.evidence_jobs import EvidenceJobStore
-        from audience_trend_miner.wikimedia import HttpWikimediaAdapter
+        from audience_trend_miner.v2.wikimedia_evidence.jobs import EvidenceJobStore
+        from audience_trend_miner.v2.wikimedia_evidence.adapters import (
+            HttpWikimediaAdapter,
+        )
 
         store = EvidenceJobStore(parsed.database_url)
         store.migrate()
@@ -73,7 +75,7 @@ def _wikimedia_evidence_main(arguments: list[str]) -> int:
 
 
 def _fixture_stage_main(arguments: list[str]) -> int:
-    from audience_trend_miner.v2_contracts import (
+    from audience_trend_miner.v2.shared import (
         execute_fixture_stage,
     )
 
@@ -107,7 +109,7 @@ def _add_v2_fixture_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _v2_progress_sink(progress_format: str):
-    from audience_trend_miner.v2_contracts import (
+    from audience_trend_miner.v2.shared import (
         human_progress_sink,
         json_progress_sink,
     )
@@ -120,7 +122,7 @@ def _v2_progress_sink(progress_format: str):
 
 
 def _execute_v2(action: Callable[[], object]) -> int:
-    from audience_trend_miner.v2_contracts import V2ContractError
+    from audience_trend_miner.v2.shared import V2ContractError
 
     try:
         action()

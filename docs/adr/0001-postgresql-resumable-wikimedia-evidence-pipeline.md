@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-07-16
 
+This decision remains authoritative for the preserved V1 implementation. It is
+superseded for V2 by [ADR-0002](0002-audience-intelligence-v2-cluster-first-country-trends.md).
+
 ## Context
 
 Wikimedia Attention Acquisition currently fetches remote evidence and transforms
