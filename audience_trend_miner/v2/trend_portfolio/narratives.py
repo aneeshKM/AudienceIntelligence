@@ -14,7 +14,17 @@ from audience_trend_miner.v2.shared import V2ContractError
 
 DEFAULT_NARRATIVE_MODEL = "openai/gpt-oss-120b"
 MAX_NARRATIVE_ATTEMPTS = 3
-NARRATIVE_PROMPT = """You write bounded commercial copy for one selected audience trend. Use only the supplied evidence and return exactly the six requested fields. Copy source_cluster_name exactly as name. For summary use exactly: 'Attention to {name} topics {rose|declined} in the supplied comparison.' Choose only schema-listed brand categories and a buying-power rating. For commercial_interpretation use exactly: '{comma-separated categories} brands may find the supplied topic group commercially relevant.' For buying_power_rationale use exactly: 'The {rating} rating is a qualitative assessment based on the supplied topics' relevance to {comma-separated categories}.' Do not return or alter deterministic facts, make any other claim, or provide hidden reasoning."""
+SUMMARY_TEMPLATE = (
+    "Attention to {name} topics {direction_word} in the supplied comparison."
+)
+COMMERCIAL_INTERPRETATION_TEMPLATE = (
+    "{category_text} brands may find the supplied topic group commercially relevant."
+)
+BUYING_POWER_RATIONALE_TEMPLATE = (
+    "The {rating} rating is a qualitative assessment based on the supplied "
+    "topics' relevance to {category_text}."
+)
+NARRATIVE_PROMPT = f"""You write bounded commercial copy for one selected audience trend. Use only the supplied evidence and return exactly the six requested fields. Copy source_cluster_name exactly as name. For summary use exactly: '{SUMMARY_TEMPLATE}' Choose only schema-listed brand categories and a buying-power rating. For commercial_interpretation use exactly: '{COMMERCIAL_INTERPRETATION_TEMPLATE}' For buying_power_rationale use exactly: '{BUYING_POWER_RATIONALE_TEMPLATE}' Do not return or alter deterministic facts, make any other claim, or provide hidden reasoning."""
 
 _PORTFOLIO_SCHEMA_PATH = (
     Path(__file__).with_name("schemas") / "trend-portfolio.schema.json"
@@ -217,15 +227,16 @@ def _bounded_template_errors(
     direction_word = "rose" if direction == "robust_growth" else "declined"
     expected = {
         "name": name,
-        "summary": (
-            f"Attention to {name} topics {direction_word} in the supplied comparison."
+        "summary": SUMMARY_TEMPLATE.format(
+            name=name,
+            direction_word=direction_word,
         ),
-        "commercial_interpretation": (
-            f"{category_text} brands may find the supplied topic group commercially relevant."
+        "commercial_interpretation": COMMERCIAL_INTERPRETATION_TEMPLATE.format(
+            category_text=category_text,
         ),
-        "buying_power_rationale": (
-            f"The {rating} rating is a qualitative assessment based on the supplied "
-            f"topics' relevance to {category_text}."
+        "buying_power_rationale": BUYING_POWER_RATIONALE_TEMPLATE.format(
+            rating=rating,
+            category_text=category_text,
         ),
     }
     return tuple(
