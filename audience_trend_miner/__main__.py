@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+import json
 import os
 from pathlib import Path
 import sys
@@ -62,7 +63,10 @@ def _v2_run_main(arguments: list[str]) -> int:
         DEFAULT_REVIEW_CAP,
         parse_review_cap,
     )
-    from audience_trend_miner.v2.shared import V2ContractError
+    from audience_trend_miner.v2.shared import (
+        V2ContractError,
+        canonical_json_fingerprint,
+    )
     from audience_trend_miner.v2.trend_portfolio import (
         DEFAULT_NARRATIVE_MODEL,
         FrozenNarrativeAdapterFactory,
@@ -134,11 +138,6 @@ def _v2_run_main(arguments: list[str]) -> int:
     parser.add_argument(
         "--progress-format", choices=("human", "json"), default="human"
     )
-    parser.add_argument(
-        "--interrupt-before-publication",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
     parsed = parser.parse_args(arguments)
     if parsed.wikimedia_fixture is None and not parsed.database_url:
         parser.error("--database-url or DATABASE_URL is required without --wikimedia-fixture")
@@ -171,6 +170,54 @@ def _v2_run_main(arguments: list[str]) -> int:
     except V2ContractError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
+
+    def fixture_fingerprint(path: Path | None) -> str | None:
+        if path is None:
+            return None
+        return canonical_json_fingerprint(
+            json.loads(path.read_text(encoding="utf-8"))
+        )
+
+    global_configuration = {
+        "as_of": parsed.as_of.isoformat(),
+        "wikimedia": canonical_json_fingerprint(
+            {
+                "mode": "fixture" if parsed.wikimedia_fixture else "production",
+                "fixture": fixture_fingerprint(parsed.wikimedia_fixture),
+                "database": (
+                    None
+                    if parsed.wikimedia_fixture
+                    else canonical_json_fingerprint(parsed.database_url)
+                ),
+            }
+        ),
+        "semantic_audience_formation": canonical_json_fingerprint(
+            {
+                "mode": "fixture" if parsed.embedding_fixture else "production",
+                "fixture": fixture_fingerprint(parsed.embedding_fixture),
+                "model": embedding_adapter.model,
+                "batch_size": (
+                    None if parsed.embedding_fixture else parsed.embedding_batch_size
+                ),
+                "similarity_threshold": parsed.similarity_threshold,
+                "review_cap": parsed.review_cap,
+            }
+        ),
+        "cluster_adjudication": canonical_json_fingerprint(
+            {
+                "mode": "fixture" if parsed.cluster_fixture else "production",
+                "fixture": fixture_fingerprint(parsed.cluster_fixture),
+                "model": cluster_factory.model,
+            }
+        ),
+        "trend_portfolio": canonical_json_fingerprint(
+            {
+                "mode": "fixture" if parsed.narrative_fixture else "production",
+                "fixture": fixture_fingerprint(parsed.narrative_fixture),
+                "model": narrative_factory.model,
+            }
+        ),
+    }
 
     if parsed.wikimedia_fixture is not None:
         def run_wikimedia(sink):
@@ -227,12 +274,13 @@ def _v2_run_main(arguments: list[str]) -> int:
             run_id=parsed.run_id,
             output_root=parsed.output_dir,
             progress_sink=sink,
-            interrupt_before_completion=parsed.interrupt_before_publication,
         ),
     )
     return _execute_v2(
         lambda: execute_global_run(
             run_id=parsed.run_id,
+            run_directory=parsed.output_dir / parsed.run_id,
+            configuration=global_configuration,
             progress_sink=_v2_progress_sink(parsed.progress_format),
             stages=stages,
         )

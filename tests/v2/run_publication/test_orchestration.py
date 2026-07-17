@@ -187,17 +187,32 @@ class GlobalOrchestrationTest(unittest.TestCase):
                 output_root,
                 FIXTURES / "global_cluster_decisions.json",
                 "changed-cluster.json",
-                lambda fixture: fixture.update(model="fixture/changed-cluster-model"),
+                lambda fixture: fixture["clusters"][0]["responses"]["proposer"][0][
+                    "groups"
+                ][0].update(rationale="Changed fixture response."),
             )
             changed_narrative = _rewritten_fixture(
                 output_root,
                 FIXTURES / "global_narratives.json",
                 "changed-narrative.json",
-                lambda fixture: fixture.update(model="fixture/changed-narrative-model"),
+                lambda fixture: fixture["clusters"].append(
+                    {"cluster_id": "unused", "responses": []}
+                ),
+            )
+            changed_embedding = _rewritten_fixture(
+                output_root,
+                FORMATION_FIXTURES / "preliminary_cluster_embeddings.json",
+                "changed-embedding.json",
+                lambda fixture: fixture["embeddings"].update(
+                    {"Selected Categories: Other": [0, 1]}
+                ),
             )
             cases = (
                 ("wikimedia-evidence", ("--as-of", "2026-07-18")),
-                ("semantic-audience-formation", ("--similarity-threshold", "0.4")),
+                (
+                    "semantic-audience-formation",
+                    ("--embedding-fixture", str(changed_embedding)),
+                ),
                 ("cluster-adjudication", ("--cluster-fixture", str(changed_cluster))),
                 ("trend-portfolio", ("--narrative-fixture", str(changed_narrative))),
             )
@@ -236,8 +251,15 @@ class GlobalOrchestrationTest(unittest.TestCase):
             }
             self.assertEqual(
                 modules,
-                {"wikimedia-evidence", "semantic-audience-formation"},
+                {
+                    "wikimedia-evidence",
+                    "semantic-audience-formation",
+                    "cluster-adjudication",
+                },
             )
+            failure_event = json.loads(failed.stdout.splitlines()[-1])
+            self.assertEqual(failure_event["operation"], "failed")
+            self.assertEqual(failure_event["level"], "error")
             self.assertFalse((output_root / "global-run" / "publication").exists())
 
     def test_invalid_fixture_returns_a_clean_failure_status(self) -> None:
@@ -255,30 +277,25 @@ class GlobalOrchestrationTest(unittest.TestCase):
             self.assertIn("error: narrative fixture", failed.stderr)
             self.assertNotIn("Traceback", failed.stderr)
 
-    def test_publication_failure_is_terminal_and_the_same_run_resumes(self) -> None:
+    def test_global_resume_rejects_an_incompatible_completed_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_root = Path(temporary_directory)
+            initial = run_global_cli(output_root)
+            self.assertEqual(initial.returncode, 0, initial.stderr)
+            manifest_path = output_root / "global-run" / "publication" / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["run_id"] = "different-run"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-            failed = run_global_cli(
-                output_root,
-                extra=("--interrupt-before-publication",),
-            )
+            failed = run_global_cli(output_root)
 
             self.assertEqual(failed.returncode, 1)
-            self.assertIn("publication interrupted before completion", failed.stderr)
-            self.assertFalse((output_root / "global-run" / "publication").exists())
+            self.assertIn("collides with requested run", failed.stderr)
             failed_events = [
                 json.loads(line) for line in failed.stdout.splitlines()
             ]
             self.assertEqual(failed_events[-1]["module"], "run-publication")
-            self.assertEqual(failed_events[-1]["operation"], "stage")
-
-            resumed = run_global_cli(output_root)
-
-            self.assertEqual(resumed.returncode, 0, resumed.stderr)
-            resumed_events = [
-                json.loads(line) for line in resumed.stdout.splitlines()
-            ]
+            self.assertEqual(failed_events[-1]["operation"], "failed")
             for module in (
                 "wikimedia-evidence",
                 "semantic-audience-formation",
@@ -288,12 +305,11 @@ class GlobalOrchestrationTest(unittest.TestCase):
                 self.assertEqual(
                     [
                         event["operation"]
-                        for event in resumed_events
+                        for event in failed_events
                         if event["module"] == module
                     ],
                     ["resume"],
                 )
-            self.assertTrue((output_root / "global-run" / "publication").is_dir())
 
 
 if __name__ == "__main__":
