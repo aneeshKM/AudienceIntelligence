@@ -50,16 +50,19 @@ class SentenceTransformerEmbeddingAdapter:
             raise V2ContractError("embedding batch size must be positive")
         self.model = model.strip()
         self.batch_size = batch_size
-        try:
-            self._encoder = encoder_factory(self.model)
-        except Exception as error:
-            raise V2ContractError(
-                f"embedding model {self.model!r} could not be loaded"
-            ) from error
+        self._encoder_factory = encoder_factory
+        self._encoder: SentenceEncoder | None = None
 
     def embed(
         self, representations: Sequence[str]
     ) -> Sequence[Sequence[float]] | NDArray[np.float64]:
+        if self._encoder is None:
+            try:
+                self._encoder = self._encoder_factory(self.model)
+            except Exception as error:
+                raise V2ContractError(
+                    f"embedding model {self.model!r} could not be loaded"
+                ) from error
         try:
             encoded = self._encoder.encode(
                 tuple(representations),

@@ -114,7 +114,6 @@ class SentenceTransformer:
             )
             environment = os.environ.copy()
             environment["TEST_ENCODER_LOG"] = str(configuration_log)
-            environment["AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD"] = "0.76"
             environment["PYTHONPATH"] = os.pathsep.join(
                 filter(None, (str(fake_package_root), environment.get("PYTHONPATH")))
             )
@@ -173,7 +172,10 @@ class SentenceTransformer:
             output_dir = Path(temporary_directory)
             publish_wikimedia_evidence(output_dir)
 
-            completed = run_stage(output_dir)
+            completed = run_stage(
+                output_dir,
+                extra_arguments=("--category-selection-only",),
+            )
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             events = [json.loads(line) for line in completed.stdout.splitlines()]

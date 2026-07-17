@@ -134,15 +134,17 @@ def form_preliminary_clusters(
     components = _connected_components(tuple(range(len(ordered_pages))), neighbors)
 
     singleton_count = sum(len(component) == 1 for component in components)
+    subdivider = _ComponentSubdivider(
+        combined_similarities,
+        ordered_pages,
+        subdivision_policy,
+    )
     reviewable_components = [
         subdivision
         for component in components
         if len(component) > 1
-        for subdivision in _subdivide_component(
+        for subdivision in subdivider.subdivide(
             component,
-            combined_similarities,
-            ordered_pages,
-            subdivision_policy,
             threshold=threshold,
         )
     ]
@@ -226,101 +228,96 @@ def _connected_components(
     return components
 
 
-def _subdivide_component(
-    component: tuple[int, ...],
-    similarities: NDArray[np.float64],
-    pages: Sequence[SelectedCategoryPage],
-    policy: SubdivisionPolicy,
-    *,
-    threshold: float,
-) -> list[tuple[int, ...]]:
-    if _estimated_input_tokens(component, pages, policy) <= policy.max_input_tokens:
-        return [component]
-    for index in component:
-        if _estimated_input_tokens((index,), pages, policy) > policy.max_input_tokens:
-            raise V2ContractError(
-                f"Canonical Page {pages[index].page_id} exceeds the model-input token guard"
-            )
+@dataclass(frozen=True)
+class _ComponentSubdivider:
+    similarities: NDArray[np.float64]
+    pages: Sequence[SelectedCategoryPage]
+    policy: SubdivisionPolicy
 
-    stricter_threshold = min(1.0, threshold + policy.stricter_threshold_step)
-    neighbors = {index: set() for index in component}
-    component_similarities = similarities[np.ix_(component, component)]
-    for local_left, local_right in np.argwhere(
-        np.triu(component_similarities >= stricter_threshold, k=1)
-    ):
-        left = component[int(local_left)]
-        right = component[int(local_right)]
-        neighbors[left].add(right)
-        neighbors[right].add(left)
-    subdivisions = _connected_components(component, neighbors)
-    if len(subdivisions) == 1:
-        if stricter_threshold < 1.0:
-            return _subdivide_component(
-                component,
-                similarities,
-                pages,
-                policy,
+    def subdivide(
+        self,
+        component: tuple[int, ...],
+        *,
+        threshold: float,
+    ) -> list[tuple[int, ...]]:
+        if self._estimated_input_tokens(component) <= self.policy.max_input_tokens:
+            return [component]
+        for index in component:
+            if self._estimated_input_tokens((index,)) > self.policy.max_input_tokens:
+                raise V2ContractError(
+                    f"Canonical Page {self.pages[index].page_id} exceeds "
+                    "the model-input token guard"
+                )
+
+        stricter_threshold = min(
+            1.0,
+            threshold + self.policy.stricter_threshold_step,
+        )
+        neighbors = {index: set() for index in component}
+        component_similarities = self.similarities[np.ix_(component, component)]
+        for local_left, local_right in np.argwhere(
+            np.triu(component_similarities >= stricter_threshold, k=1)
+        ):
+            left = component[int(local_left)]
+            right = component[int(local_right)]
+            neighbors[left].add(right)
+            neighbors[right].add(left)
+        subdivisions = _connected_components(component, neighbors)
+        if len(subdivisions) == 1:
+            if stricter_threshold < 1.0:
+                return self.subdivide(
+                    component,
+                    threshold=stricter_threshold,
+                )
+            return self._pack_indistinguishable_members(component)
+        return [
+            nested
+            for subdivision in subdivisions
+            for nested in self.subdivide(
+                subdivision,
                 threshold=stricter_threshold,
             )
-        return _pack_indistinguishable_members(component, pages, policy)
-    return [
-        nested
-        for subdivision in subdivisions
-        for nested in _subdivide_component(
-            subdivision,
-            similarities,
-            pages,
-            policy,
-            threshold=stricter_threshold,
+        ]
+
+    def _estimated_input_tokens(self, component: Sequence[int]) -> int:
+        records = (
+            json.dumps(
+                {
+                    "page_id": self.pages[index].page_id,
+                    "canonical_title": self.pages[index].canonical_title,
+                    "lead": self.pages[index].lead,
+                    "selected_categories": self.pages[index].selected_categories,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            for index in component
         )
-    ]
+        record_sizes = [len(record) for record in records]
+        return (
+            self.policy.fixed_prompt_tokens
+            + 2
+            + sum(record_sizes)
+            + max(0, len(record_sizes) - 1)
+        )
 
-
-def _estimated_input_tokens(
-    component: Sequence[int],
-    pages: Sequence[SelectedCategoryPage],
-    policy: SubdivisionPolicy,
-) -> int:
-    records = (
-        json.dumps(
-            {
-                "page_id": pages[index].page_id,
-                "canonical_title": pages[index].canonical_title,
-                "lead": pages[index].lead,
-                "selected_categories": pages[index].selected_categories,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        for index in component
-    )
-    record_sizes = [len(record) for record in records]
-    return (
-        policy.fixed_prompt_tokens
-        + 2
-        + sum(record_sizes)
-        + max(0, len(record_sizes) - 1)
-    )
-
-
-def _pack_indistinguishable_members(
-    component: tuple[int, ...],
-    pages: Sequence[SelectedCategoryPage],
-    policy: SubdivisionPolicy,
-) -> list[tuple[int, ...]]:
-    groups: list[tuple[int, ...]] = []
-    current: tuple[int, ...] = ()
-    for index in component:
-        candidate = (*current, index)
-        if (
-            current
-            and _estimated_input_tokens(candidate, pages, policy)
-            > policy.max_input_tokens
-        ):
+    def _pack_indistinguishable_members(
+        self,
+        component: tuple[int, ...],
+    ) -> list[tuple[int, ...]]:
+        groups: list[tuple[int, ...]] = []
+        current: tuple[int, ...] = ()
+        for index in component:
+            candidate = (*current, index)
+            if (
+                current
+                and self._estimated_input_tokens(candidate)
+                > self.policy.max_input_tokens
+            ):
+                groups.append(current)
+                current = (index,)
+            else:
+                current = candidate
+        if current:
             groups.append(current)
-            current = (index,)
-        else:
-            current = candidate
-    if current:
-        groups.append(current)
-    return groups
+        return groups

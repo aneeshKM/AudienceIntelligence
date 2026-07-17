@@ -65,16 +65,17 @@ class PreliminaryClusteringTest(unittest.TestCase):
             (0.0, 1.0),
             (0.0, 1.0),
         )
+        policy = SubdivisionPolicy(
+            max_input_tokens=250,
+            fixed_prompt_tokens=0,
+            stricter_threshold_step=0.1,
+        )
 
         artifact = form_preliminary_clusters(
             pages,
             SequentialEmbeddingAdapter([pair_vectors, pair_vectors]),
             threshold=0.75,
-            subdivision_policy=SubdivisionPolicy(
-                max_input_tokens=250,
-                fixed_prompt_tokens=0,
-                stricter_threshold_step=0.1,
-            ),
+            subdivision_policy=policy,
         )
 
         clusters = [cluster.page_ids for cluster in artifact.preliminary_clusters]
@@ -93,11 +94,7 @@ class PreliminaryClusteringTest(unittest.TestCase):
             tuple(reversed(pages)),
             SequentialEmbeddingAdapter([pair_vectors, pair_vectors]),
             threshold=0.75,
-            subdivision_policy=SubdivisionPolicy(
-                max_input_tokens=250,
-                fixed_prompt_tokens=0,
-                stricter_threshold_step=0.1,
-            ),
+            subdivision_policy=policy,
         )
         self.assertEqual(
             [cluster.page_ids for cluster in artifact.preliminary_clusters],

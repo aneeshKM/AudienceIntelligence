@@ -31,7 +31,7 @@ production model embedded the complete Content Representations and Category
 Representations locally; one vectorized Combined Similarity matrix was reused
 for every threshold below.
 
-| Threshold | Clusters | Clustered pages | Singletons | Largest component | Median cohesion | Minimum cohesion |
+| Threshold | Preliminary Clusters | Canonical Pages in clusters | Singletons | Largest component | Median cohesion | Minimum cohesion |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0.60 | 97 | 2,767 | 887 | 2,462 | 0.634 | 0.343 |
 | 0.62 (V1) | 133 | 2,560 | 1,094 | 2,120 | 0.648 | 0.372 |
@@ -48,8 +48,8 @@ low-cohesion component dominated the retained pages. The V1 value `0.62` was
 therefore not transferable to the dual-representation V2 corpus.
 
 At `0.76`, the last visibly weak chain present at `0.75` breaks: minimum
-whole-component cohesion rises from `0.567` to `0.660`, while 591 pages remain
-available across 206 non-singleton clusters. Representative largest groups were
+whole-component cohesion rises from `0.567` to `0.660`, while 591 Canonical
+Pages remain available across 206 Preliminary Clusters. Representative largest groups were
 recognizable tennis, national-football, calendar-date, Bosnia and Herzegovina,
 and Ingalls-family neighborhoods. Raising the threshold to `0.78` or `0.80`
 improved cohesion incrementally but discarded a further 132 or 265 pages as
@@ -59,7 +59,7 @@ oversized cases without changing that global semantic boundary.
 
 Running the selected production configuration through the stage applied the
 guard to the 206 non-singleton connected components and produced 217 bounded
-review units. The 11-unit increase is subdivision only: the original 3,063
+Preliminary Clusters. The 11-cluster increase is subdivision only: the original 3,063
 singleton count was unchanged and the stage retained every member of each
 reviewable original component.
 

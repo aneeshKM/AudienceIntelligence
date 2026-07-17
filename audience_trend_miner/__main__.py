@@ -98,14 +98,23 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--wikimedia-evidence", type=Path)
     parser.add_argument("--embedding-fixture", type=Path)
-    parser.add_argument(
+    formation_mode = parser.add_mutually_exclusive_group()
+    formation_mode.add_argument(
         "--similarity-threshold",
         type=float,
-        default=os.environ.get("AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD"),
+        default=os.environ.get(
+            "AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD",
+            str(DEFAULT_SIMILARITY_THRESHOLD),
+        ),
         help=(
             "inclusive Combined Similarity boundary; the selected production "
             f"value is {DEFAULT_SIMILARITY_THRESHOLD}"
         ),
+    )
+    formation_mode.add_argument(
+        "--category-selection-only",
+        action="store_true",
+        help="stop after deterministic Selected Category formation",
     )
     parser.add_argument(
         "--embedding-model",
@@ -124,9 +133,20 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
     parser.add_argument("--progress-format", choices=("human", "json"), default="human")
     parsed = parser.parse_args(arguments)
     sink = _v2_progress_sink(parsed.progress_format)
+    if parsed.category_selection_only:
+        if parsed.embedding_fixture is not None:
+            parser.error(
+                "--embedding-fixture cannot be used with --category-selection-only"
+            )
+        return _execute_v2(
+            lambda: execute_category_selection(
+                run_id=parsed.run_id,
+                output_root=parsed.output_dir,
+                wikimedia_evidence_path=parsed.wikimedia_evidence,
+                progress_sink=sink,
+            )
+        )
     if parsed.embedding_fixture is not None:
-        if parsed.similarity_threshold is None:
-            parser.error("--similarity-threshold is required with --embedding-fixture")
         return _execute_v2(
             lambda: execute_preliminary_clustering(
                 run_id=parsed.run_id,
@@ -139,25 +159,16 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
                 progress_sink=sink,
             )
         )
-    if parsed.similarity_threshold is not None:
-        return _execute_v2(
-            lambda: execute_preliminary_clustering(
-                run_id=parsed.run_id,
-                output_root=parsed.output_dir,
-                wikimedia_evidence_path=parsed.wikimedia_evidence,
-                embedding_adapter=SentenceTransformerEmbeddingAdapter(
-                    model=parsed.embedding_model,
-                    batch_size=parsed.embedding_batch_size,
-                ),
-                threshold=parsed.similarity_threshold,
-                progress_sink=sink,
-            )
-        )
     return _execute_v2(
-        lambda: execute_category_selection(
+        lambda: execute_preliminary_clustering(
             run_id=parsed.run_id,
             output_root=parsed.output_dir,
             wikimedia_evidence_path=parsed.wikimedia_evidence,
+            embedding_adapter=SentenceTransformerEmbeddingAdapter(
+                model=parsed.embedding_model,
+                batch_size=parsed.embedding_batch_size,
+            ),
+            threshold=parsed.similarity_threshold,
             progress_sink=sink,
         )
     )
