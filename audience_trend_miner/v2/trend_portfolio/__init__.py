@@ -16,6 +16,7 @@ from audience_trend_miner.v2.trend_portfolio.narratives import (
     DEFAULT_NARRATIVE_MODEL,
     FrozenNarrativeAdapterFactory,
     ProductionNarrativeAdapterFactory,
+    validate_completed_narrative_evidence,
 )
 from audience_trend_miner.v2.trend_portfolio.stage import (
     execute_trend_portfolio_stage,
@@ -34,4 +35,5 @@ __all__ = [
     "attach_cluster_traffic",
     "execute_trend_portfolio_stage",
     "qualify_and_rank_portfolio",
+    "validate_completed_narrative_evidence",
 ]

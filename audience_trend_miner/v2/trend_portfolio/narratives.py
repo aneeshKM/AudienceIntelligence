@@ -215,6 +215,59 @@ def narrative_validation_errors(
     )
 
 
+def validate_completed_narrative_evidence(
+    record: dict[str, object],
+    *,
+    expected_model_input: dict[str, object],
+    expected_model: str,
+    expected_narrative: dict[str, object],
+) -> None:
+    """Validate persisted narrative attempts through the owning module contract."""
+    attempts = record.get("attempts")
+    if (
+        record.get("prompt") != NARRATIVE_PROMPT
+        or record.get("model_input") != expected_model_input
+        or record.get("model") != expected_model
+        or not isinstance(attempts, list)
+        or not attempts
+        or len(attempts) > MAX_NARRATIVE_ATTEMPTS
+    ):
+        raise V2ContractError("Trend Portfolio narrative evidence is inconsistent")
+    for attempt_number, attempt in enumerate(attempts, start=1):
+        if not isinstance(attempt, dict) or attempt.get("attempt") != attempt_number:
+            raise V2ContractError("Trend Portfolio narrative evidence is inconsistent")
+        delivery_status = attempt.get("delivery_status")
+        validation_status = attempt.get("validation_status")
+        output = attempt.get("output")
+        errors = attempt.get("errors")
+        if not isinstance(errors, list) or not all(
+            isinstance(error, str) for error in errors
+        ):
+            raise V2ContractError("Trend Portfolio narrative evidence is inconsistent")
+        if delivery_status == "error":
+            consistent = validation_status == "not_run" and output is None and bool(errors)
+        elif delivery_status == "delivered":
+            expected_errors = narrative_validation_errors(output, expected_model_input)
+            consistent = (
+                validation_status == ("invalid" if expected_errors else "valid")
+                and errors == list(expected_errors)
+            )
+        else:
+            consistent = False
+        if not consistent:
+            raise V2ContractError("Trend Portfolio narrative evidence is inconsistent")
+    final_attempt = cast(dict[str, object], attempts[-1])
+    if (
+        final_attempt["validation_status"] != "valid"
+        or final_attempt["output"] != expected_narrative
+        or any(
+            cast(dict[str, object], attempt)["validation_status"] == "valid"
+            for attempt in attempts[:-1]
+        )
+    ):
+        raise V2ContractError("Trend Portfolio narrative evidence is inconsistent")
+
+
 def _bounded_template_errors(
     output: dict[str, object],
     evidence: dict[str, object],

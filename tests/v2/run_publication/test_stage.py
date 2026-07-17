@@ -332,7 +332,7 @@ class RunPublicationStageTest(unittest.TestCase):
                     **attempts[-1],
                     "validation_status": "invalid",
                     "output": marker,
-                    "errors": ["rejected unstructured output"],
+                    "errors": [f"'{marker}' is not of type 'object'"],
                 },
                 valid_attempt,
             ]
@@ -555,6 +555,7 @@ class RunPublicationStageTest(unittest.TestCase):
             "ranking",
             "final-narrative",
             "unsafe-final-narrative",
+            "attempt-status",
         )
         for scenario in scenarios:
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
@@ -618,7 +619,7 @@ class RunPublicationStageTest(unittest.TestCase):
                     trend["payload"]["audience_portfolio"][0]["narrative"][
                         "name"
                     ] = "Contradictory final narrative"
-                else:
+                elif scenario == "unsafe-final-narrative":
                     unsafe = "Secret hidden reasoning: readers will buy products."
                     trend["payload"]["audience_portfolio"][0]["narrative"][
                         "summary"
@@ -626,6 +627,12 @@ class RunPublicationStageTest(unittest.TestCase):
                     trend["payload"]["narrative_evidence"][0]["attempts"][-1][
                         "output"
                     ]["summary"] = unsafe
+                else:
+                    final_attempt = trend["payload"]["narrative_evidence"][0][
+                        "attempts"
+                    ][-1]
+                    final_attempt["delivery_status"] = "error"
+                    final_attempt["errors"] = ["contradictory delivery status"]
                 trend_path.write_text(json.dumps(trend), encoding="utf-8")
 
                 completed = _run_publication(root)

@@ -27,10 +27,7 @@ from audience_trend_miner.v2.trend_portfolio import (
     ClusterTraffic,
     attach_cluster_traffic,
     qualify_and_rank_portfolio,
-)
-from audience_trend_miner.v2.trend_portfolio.narratives import (
-    NARRATIVE_PROMPT,
-    narrative_validation_errors,
+    validate_completed_narrative_evidence,
 )
 
 
@@ -104,8 +101,8 @@ def execute_run_publication(
         wikimedia_evidence_path=resolved_paths["wikimedia-evidence"],
         cluster_adjudication_path=resolved_paths["cluster-adjudication"],
     )
-    _validate_upstream(artifacts, expected_traffic)
     _ensure_safe(artifacts)
+    _validate_upstream(artifacts, expected_traffic)
 
     if os.path.lexists(publication_directory):
         _validate_existing_publication(publication_directory, run_id, artifacts)
@@ -454,8 +451,13 @@ def _validate_cross_stage_values(
             "current": current.observed_page_days
             / (current.successful_days * member_count),
         }
-        attempts = _list_of_mappings(narrative_by_id[cluster_id]["attempts"])
         narrative_record = narrative_by_id[cluster_id]
+        validate_completed_narrative_evidence(
+            narrative_record,
+            expected_model_input=expected_model_input,
+            expected_model=narrative_model,
+            expected_narrative=_mapping(item["narrative"]),
+        )
         if (
             item["traffic"] != expected_window_traffic
             or item["direction"] != record["direction"]
@@ -464,14 +466,6 @@ def _validate_cross_stage_values(
             or item["impact_score"] != expected_trend.impact_score
             or _mapping(narrative_by_id[cluster_id]["model_input"])
             != expected_model_input
-            or narrative_record["prompt"] != NARRATIVE_PROMPT
-            or narrative_record["model"] != narrative_model
-            or [attempt["attempt"] for attempt in attempts]
-            != list(range(1, len(attempts) + 1))
-            or any(attempt["validation_status"] == "valid" for attempt in attempts[:-1])
-            or attempts[-1]["validation_status"] != "valid"
-            or attempts[-1]["output"] != item["narrative"]
-            or narrative_validation_errors(item["narrative"], expected_model_input)
         ):
             raise V2ContractError("Trend Portfolio product facts are inconsistent")
 
@@ -522,11 +516,16 @@ def _audit_stage_evidence(
     stage: str, payload: dict[str, object]
 ) -> dict[str, object]:
     evidence = deepcopy(payload)
-    if stage != "trend-portfolio":
-        return evidence
-    for narrative in _list_of_mappings(evidence["narrative_evidence"]):
-        for attempt in _list_of_mappings(narrative["attempts"]):
-            attempt.pop("output", None)
+    if stage == "trend-portfolio":
+        for narrative in _list_of_mappings(evidence["narrative_evidence"]):
+            for attempt in _list_of_mappings(narrative["attempts"]):
+                attempt.pop("output", None)
+                attempt.pop("errors", None)
+    elif stage == "cluster-adjudication":
+        for adjudication in _list_of_mappings(evidence["adjudications"]):
+            for step in _list_of_mappings(adjudication["steps"]):
+                for attempt in _list_of_mappings(step["attempts"]):
+                    attempt.pop("error", None)
     return evidence
 
 
