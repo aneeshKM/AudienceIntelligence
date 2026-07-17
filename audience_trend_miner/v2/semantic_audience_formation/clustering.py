@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import json
 import math
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -82,6 +82,8 @@ class PreliminaryClusterArtifact:
     subdivision_policy: SubdivisionPolicy
     preliminary_clusters: tuple[PreliminaryCluster, ...]
     singleton_count: int
+    subdivided_component_count: int
+    subdivision_count: int
 
     def record(self) -> dict[str, object]:
         """Return the minimal serializable evidence produced by fixture formation."""
@@ -94,6 +96,7 @@ def form_preliminary_clusters(
     *,
     threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
     subdivision_policy: SubdivisionPolicy = SubdivisionPolicy(),
+    progress: Callable[[str, str], None] | None = None,
 ) -> PreliminaryClusterArtifact:
     """Form and rank Preliminary Clusters without traffic evidence."""
     if not math.isfinite(threshold) or not -1 <= threshold <= 1:
@@ -117,6 +120,12 @@ def form_preliminary_clusters(
     )
     if content_vectors.shape[1] != category_vectors.shape[1]:
         raise V2ContractError("embeddings must be dimensionally consistent")
+    if progress is not None:
+        progress(
+            "embed-representations",
+            "embedded content and category representations using model "
+            f"{embedding_adapter.model!r}",
+        )
 
     content_similarity = content_vectors @ content_vectors.T
     category_similarity = category_vectors @ category_vectors.T
@@ -134,20 +143,36 @@ def form_preliminary_clusters(
     components = _connected_components(tuple(range(len(ordered_pages))), neighbors)
 
     singleton_count = sum(len(component) == 1 for component in components)
+    if progress is not None:
+        progress(
+            "form-components",
+            f"formed {len(components)} connected components at inclusive threshold "
+            f"{threshold:g}; discarded "
+            f"{singleton_count} singleton components",
+        )
     subdivider = _ComponentSubdivider(
         combined_similarities,
         ordered_pages,
         subdivision_policy,
     )
-    reviewable_components = [
-        subdivision
-        for component in components
-        if len(component) > 1
-        for subdivision in subdivider.subdivide(
-            component,
-            threshold=threshold,
+    reviewable_components: list[tuple[int, ...]] = []
+    subdivided_component_count = 0
+    subdivision_count = 0
+    for component in components:
+        if len(component) == 1:
+            continue
+        subdivisions = subdivider.subdivide(component, threshold=threshold)
+        reviewable_components.extend(subdivisions)
+        if subdivisions != [component]:
+            subdivided_component_count += 1
+            subdivision_count += len(subdivisions)
+    if progress is not None:
+        progress(
+            "subdivide-components",
+            f"subdivided {subdivided_component_count} oversized components into "
+            f"{subdivision_count} subdivisions using the "
+            f"{subdivision_policy.max_input_tokens}-token {subdivision_policy.method} guard",
         )
-    ]
     clusters = [
         PreliminaryCluster(
             members=tuple(ordered_pages[index] for index in component),
@@ -158,6 +183,11 @@ def form_preliminary_clusters(
     clusters.sort(
         key=lambda cluster: (-cluster.cohesion, -len(cluster.members), cluster.page_ids)
     )
+    if progress is not None:
+        progress(
+            "rank-clusters",
+            f"ranked {len(clusters)} eligible Preliminary Clusters by whole-component cohesion",
+        )
     return PreliminaryClusterArtifact(
         embedding_model=embedding_adapter.model,
         content_weight=CONTENT_WEIGHT,
@@ -166,6 +196,8 @@ def form_preliminary_clusters(
         subdivision_policy=subdivision_policy,
         preliminary_clusters=tuple(clusters),
         singleton_count=singleton_count,
+        subdivided_component_count=subdivided_component_count,
+        subdivision_count=subdivision_count,
     )
 
 

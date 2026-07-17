@@ -85,6 +85,8 @@ class PreliminaryClusteringTest(unittest.TestCase):
             list(range(1, 7)),
         )
         self.assertEqual(artifact.singleton_count, 0)
+        self.assertEqual(artifact.subdivided_component_count, 1)
+        self.assertEqual(artifact.subdivision_count, 2)
         self.assertEqual(artifact.subdivision_policy.method, "stricter-boundary")
         self.assertEqual(
             artifact.subdivision_policy.token_estimation,

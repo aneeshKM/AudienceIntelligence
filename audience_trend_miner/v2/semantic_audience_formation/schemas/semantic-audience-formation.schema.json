@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["configuration", "counts", "preliminary_clusters", "completion"],
+  "properties": {
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category_rule_set_version", "embedding_model", "content_weight", "category_weight", "similarity_threshold", "subdivision_policy", "review_cap"],
+      "properties": {
+        "category_rule_set_version": {"type": "string", "minLength": 1},
+        "embedding_model": {"type": "string", "minLength": 1},
+        "content_weight": {"const": 0.7},
+        "category_weight": {"const": 0.3},
+        "similarity_threshold": {"type": "number", "minimum": -1, "maximum": 1},
+        "subdivision_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_input_tokens", "fixed_prompt_tokens", "stricter_threshold_step", "method", "token_estimation"],
+          "properties": {
+            "max_input_tokens": {"type": "integer", "minimum": 1},
+            "fixed_prompt_tokens": {"type": "integer", "minimum": 0},
+            "stricter_threshold_step": {"type": "number", "minimum": 0.01, "maximum": 1},
+            "method": {"const": "stricter-boundary"},
+            "token_estimation": {"const": "utf8-bytes-upper-bound"}
+          }
+        },
+        "review_cap": {
+          "oneOf": [
+            {"type": "integer", "minimum": 1},
+            {"const": "all"}
+          ]
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible_clusters", "selected_clusters", "omitted_clusters", "discarded_singleton_components", "subdivided_components", "subdivisions_created"],
+      "properties": {
+        "eligible_clusters": {"type": "integer", "minimum": 0},
+        "selected_clusters": {"type": "integer", "minimum": 0},
+        "omitted_clusters": {"type": "integer", "minimum": 0},
+        "discarded_singleton_components": {"type": "integer", "minimum": 0},
+        "subdivided_components": {"type": "integer", "minimum": 0},
+        "subdivisions_created": {"type": "integer", "minimum": 0}
+      }
+    },
+    "preliminary_clusters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["cohesion", "members"],
+        "properties": {
+          "cohesion": {"type": "number", "minimum": -1, "maximum": 1},
+          "members": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["page_id", "canonical_title", "lead", "selected_categories"],
+              "properties": {
+                "page_id": {"type": "integer"},
+                "canonical_title": {"type": "string", "minLength": 1},
+                "lead": {"type": "string"},
+                "selected_categories": {"type": "array", "maxItems": 5, "items": {"type": "string"}, "uniqueItems": true}
+              }
+            }
+          }
+        }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {"status": {"const": "complete"}}
+    }
+  }
+}

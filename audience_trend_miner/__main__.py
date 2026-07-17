@@ -81,6 +81,10 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
         execute_category_selection,
         execute_preliminary_clustering,
     )
+    from audience_trend_miner.v2.semantic_audience_formation.stage import (
+        DEFAULT_MAX_LLM_CLUSTERS,
+        parse_review_cap,
+    )
     from audience_trend_miner.v2.semantic_audience_formation.embeddings import (
         DEFAULT_EMBEDDING_BATCH_SIZE,
         DEFAULT_EMBEDDING_MODEL,
@@ -90,6 +94,12 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2.semantic_audience_formation.clustering import (
         DEFAULT_SIMILARITY_THRESHOLD,
     )
+
+    def review_cap_argument(value: str):
+        try:
+            return parse_review_cap(value)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError(str(error)) from error
 
     parser = argparse.ArgumentParser(
         prog="audience-trend-miner v2-semantic-audience-formation"
@@ -130,6 +140,20 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
             str(DEFAULT_EMBEDDING_BATCH_SIZE),
         ),
     )
+    parser.add_argument(
+        "--max-llm-clusters",
+        type=review_cap_argument,
+        default=os.environ.get(
+            "AUDIENCE_TREND_MINER_MAX_LLM_CLUSTERS",
+            str(DEFAULT_MAX_LLM_CLUSTERS),
+        ),
+        help="Preliminary Cluster review cap: a positive integer or 'all'",
+    )
+    parser.add_argument(
+        "--interrupt-before-completion",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--progress-format", choices=("human", "json"), default="human")
     parsed = parser.parse_args(arguments)
     sink = _v2_progress_sink(parsed.progress_format)
@@ -156,6 +180,8 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
                     parsed.embedding_fixture
                 ),
                 threshold=parsed.similarity_threshold,
+                max_llm_clusters=parsed.max_llm_clusters,
+                interrupt_before_completion=parsed.interrupt_before_completion,
                 progress_sink=sink,
             )
         )
@@ -169,6 +195,8 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
                 batch_size=parsed.embedding_batch_size,
             ),
             threshold=parsed.similarity_threshold,
+            max_llm_clusters=parsed.max_llm_clusters,
+            interrupt_before_completion=parsed.interrupt_before_completion,
             progress_sink=sink,
         )
     )

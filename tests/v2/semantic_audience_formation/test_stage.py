@@ -79,7 +79,206 @@ def publish_wikimedia_evidence(output_dir: Path, run_id: str = "formation-run") 
     return output_dir / run_id / "wikimedia-evidence.json"
 
 
+def publish_clustering_contract_evidence(output_dir: Path) -> None:
+    artifact_path = publish_wikimedia_evidence(output_dir)
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    page_facts = (
+        (7, "Gamma Two", "Gamma"),
+        (2, "Alpha Two", "Alpha"),
+        (10, "Singleton", "Isolated"),
+        (4, "Beta One", "Beta"),
+        (9, "Boundary Two", "Boundary"),
+        (1, "Alpha One", "Alpha"),
+        (6, "Gamma One", "Gamma"),
+        (5, "Beta Two", "Beta"),
+        (8, "Boundary One", "Boundary"),
+        (3, "Alpha Three", "Alpha"),
+    )
+    artifact["payload"]["canonical_pages"] = [
+        {
+            "page_id": page_id,
+            "canonical_title": title,
+            "lead": f"{title.lower()} lead.",
+            "categories": [category],
+            "aliases": [title],
+            "observations": [],
+        }
+        for page_id, title, category in page_facts
+    ]
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+
 class SemanticAudienceFormationStageTest(unittest.TestCase):
+    def test_stage_does_not_publish_a_partial_artifact_on_atomic_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            publish_wikimedia_evidence(output_dir)
+
+            completed = run_stage(
+                output_dir,
+                embedding_fixture=EMBEDDING_FIXTURE,
+                extra_arguments=("--interrupt-before-completion",),
+            )
+
+            run_directory = output_dir / "formation-run"
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("interrupted before artifact completion", completed.stderr)
+            self.assertFalse(
+                (run_directory / "semantic-audience-formation.json").exists()
+            )
+            self.assertEqual(list(run_directory.glob(".semantic-audience-formation.*.tmp")), [])
+
+    def test_stage_resumes_a_compatible_completed_artifact_without_embedding(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            publish_wikimedia_evidence(output_dir)
+            fake_package_root = output_dir / "fake-package"
+            fake_package = fake_package_root / "sentence_transformers"
+            fake_package.mkdir(parents=True)
+            embedding_log = output_dir / "embedding-calls.jsonl"
+            fake_package.joinpath("__init__.py").write_text(
+                """\
+import json
+import os
+from pathlib import Path
+
+class SentenceTransformer:
+    def __init__(self, model):
+        self.model = model
+
+    def encode(self, representations, *, batch_size, convert_to_numpy):
+        with Path(os.environ["TEST_EMBEDDING_LOG"]).open("a", encoding="utf-8") as log:
+            log.write(json.dumps({"count": len(representations)}) + "\\n")
+        return [[1.0, 0.0] for _representation in representations]
+""",
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment["TEST_EMBEDDING_LOG"] = str(embedding_log)
+            environment["PYTHONPATH"] = os.pathsep.join(
+                filter(None, (str(fake_package_root), environment.get("PYTHONPATH")))
+            )
+
+            first = run_stage(output_dir, environment=environment)
+            second = run_stage(output_dir, environment=environment)
+            incompatible = run_stage(
+                output_dir,
+                environment=environment,
+                extra_arguments=("--max-llm-clusters", "2"),
+            )
+
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertNotEqual(incompatible.returncode, 0)
+            self.assertIn(
+                "conflicts with requested configuration",
+                incompatible.stderr,
+            )
+            self.assertEqual(len(embedding_log.read_text().splitlines()), 2)
+            resumed_events = [
+                json.loads(line) for line in second.stdout.splitlines()
+            ]
+            self.assertEqual(
+                [event["operation"] for event in resumed_events],
+                ["resume"],
+            )
+            self.assertEqual(resumed_events[0]["progress"], {"current": 1, "total": 1})
+
+    def test_review_cap_defaults_to_ten_accepts_all_and_rejects_invalid_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+
+            default_output = root / "default"
+            publish_wikimedia_evidence(default_output)
+            completed = run_stage(default_output, embedding_fixture=EMBEDDING_FIXTURE)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            default_payload = json.loads(
+                (default_output / "formation-run" / "semantic-audience-formation.json").read_text()
+            )["payload"]
+            self.assertEqual(default_payload["configuration"]["review_cap"], 10)
+
+            all_output = root / "all"
+            publish_wikimedia_evidence(all_output)
+            environment = os.environ.copy()
+            environment["AUDIENCE_TREND_MINER_MAX_LLM_CLUSTERS"] = "all"
+            completed = run_stage(
+                all_output,
+                embedding_fixture=EMBEDDING_FIXTURE,
+                environment=environment,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            all_payload = json.loads(
+                (all_output / "formation-run" / "semantic-audience-formation.json").read_text()
+            )["payload"]
+            self.assertEqual(all_payload["configuration"]["review_cap"], "all")
+
+            for index, invalid_value in enumerate(("", "0", "-1", "1.5", "many")):
+                with self.subTest(invalid_value=invalid_value):
+                    invalid_output = root / f"invalid-{index}"
+                    publish_wikimedia_evidence(invalid_output)
+                    completed = run_stage(
+                        invalid_output,
+                        embedding_fixture=EMBEDDING_FIXTURE,
+                        extra_arguments=("--max-llm-clusters", invalid_value),
+                    )
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn(
+                        "review cap must be a positive integer or 'all'",
+                        completed.stderr,
+                    )
+                    self.assertFalse(
+                        (
+                            invalid_output
+                            / "formation-run"
+                            / "semantic-audience-formation.json"
+                        ).exists()
+                    )
+
+    def test_stage_publishes_ranked_capped_minimal_cluster_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            publish_clustering_contract_evidence(output_dir)
+
+            completed = run_stage(
+                output_dir,
+                embedding_fixture=EMBEDDING_FIXTURE,
+                extra_arguments=("--max-llm-clusters", "2"),
+            )
+
+            artifact_path = output_dir / "formation-run" / "semantic-audience-formation.json"
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            payload = artifact["payload"]
+            self.assertEqual(artifact["status"], "complete")
+            self.assertEqual(payload["configuration"]["review_cap"], 2)
+            self.assertEqual(
+                payload["counts"],
+                {
+                    "eligible_clusters": 4,
+                    "selected_clusters": 2,
+                    "omitted_clusters": 2,
+                    "discarded_singleton_components": 1,
+                    "subdivided_components": 0,
+                    "subdivisions_created": 0,
+                },
+            )
+            self.assertEqual(
+                [
+                    [member["page_id"] for member in cluster["members"]]
+                    for cluster in payload["preliminary_clusters"]
+                ],
+                [[1, 2, 3], [4, 5]],
+            )
+            self.assertEqual(
+                set(payload["preliminary_clusters"][0]["members"][0]),
+                {"page_id", "canonical_title", "lead", "selected_categories"},
+            )
+            serialized = json.dumps(artifact).lower()
+            self.assertNotIn("traffic", serialized)
+            self.assertNotIn("observation", serialized)
+            self.assertNotIn("embedding_vectors", serialized)
+            self.assertNotIn("similarity_matrix", serialized)
+
     def test_stage_runs_production_embeddings_with_safe_configuration_progress(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)
@@ -133,11 +332,19 @@ class SentenceTransformer:
             events = [json.loads(line) for line in completed.stdout.splitlines()]
             self.assertEqual(
                 [event["operation"] for event in events],
-                ["select-categories", "form-preliminary-clusters"],
+                [
+                    "select-categories",
+                    "embed-representations",
+                    "form-components",
+                    "subdivide-components",
+                    "rank-clusters",
+                    "select-review-cap",
+                    "publish",
+                ],
             )
             self.assertIn("using model 'local/override-model'", events[1]["message"])
-            self.assertIn("threshold 0.76", events[1]["message"])
-            self.assertIn("16384-token stricter-boundary guard", events[1]["message"])
+            self.assertIn("threshold 0.76", events[2]["message"])
+            self.assertIn("16384-token stricter-boundary guard", events[3]["message"])
             configurations = [
                 json.loads(line) for line in configuration_log.read_text().splitlines()
             ]
@@ -162,10 +369,25 @@ class SentenceTransformer:
             events = [json.loads(line) for line in completed.stdout.splitlines()]
             self.assertEqual(
                 [event["operation"] for event in events],
-                ["select-categories", "form-preliminary-clusters"],
+                [
+                    "select-categories",
+                    "embed-representations",
+                    "form-components",
+                    "subdivide-components",
+                    "rank-clusters",
+                    "select-review-cap",
+                    "publish",
+                ],
             )
-            self.assertIn("formed 1 Preliminary Clusters", events[1]["message"])
-            self.assertIn("discarded 0 singleton components", events[1]["message"])
+            self.assertEqual(
+                [event["progress"] for event in events],
+                [
+                    {"current": current, "total": 7}
+                    for current in range(1, 8)
+                ],
+            )
+            self.assertIn("formed 1 connected components", events[2]["message"])
+            self.assertIn("discarded 0 singleton components", events[2]["message"])
 
     def test_stage_consumes_completed_wikimedia_evidence_without_reacquisition(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

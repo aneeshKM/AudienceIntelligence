@@ -111,7 +111,8 @@ with `--embedding-model` and `--embedding-batch-size`, or with
 python -m audience_trend_miner v2-semantic-audience-formation \
   --run-id example-run \
   --output-dir runs \
-  --similarity-threshold 0.5
+  --similarity-threshold 0.5 \
+  --max-llm-clusters 10
 ```
 
 Inference is batched and similarity is vectorized in memory. Raw embedding
@@ -128,6 +129,15 @@ fixed adjudication prompt. Members are never truncated or moved across an
 original connected-component boundary. See the
 [production threshold experiment](docs/research/semantic-formation-threshold.md)
 for the evidence and rationale.
+
+After cohesion ranking, the stage selects at most ten Preliminary Clusters by
+default. Set `AUDIENCE_TREND_MINER_MAX_LLM_CLUSTERS` or pass
+`--max-llm-clusters` with a positive integer; use `all` for an uncapped
+experiment. The validated `semantic-audience-formation.json` artifact records
+the cap and selection, singleton, omission, and subdivision counts while
+excluding traffic, embeddings, and the complete similarity matrix. Publication
+is atomic, and a completed artifact with the same formation configuration is
+resumed without repeating embedding inference.
 
 For local development, copy `.env.example` to `.env` and set both values there:
 
