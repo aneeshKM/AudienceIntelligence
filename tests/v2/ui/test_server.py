@@ -102,6 +102,207 @@ def _write_completed_publication(root: Path, run_id: str) -> None:
 
 
 class RunServerTest(unittest.TestCase):
+    def test_flushed_cli_events_are_forwarded_live_before_process_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fake_cli = root / "streaming_cli.py"
+            fake_cli.write_text(
+                "import json, sys, time\n"
+                "run_id = sys.argv[sys.argv.index('--run-id') + 1]\n"
+                "def emit(sequence, operation, message, current):\n"
+                "    print(json.dumps({\n"
+                "        'schema_version': '1.0', 'run_id': run_id,\n"
+                "        'sequence': sequence, 'timestamp': '2026-07-17T12:00:00+00:00',\n"
+                "        'module': 'wikimedia-evidence', 'operation': operation,\n"
+                "        'level': 'info', 'message': message,\n"
+                "        'progress': {'current': current, 'total': 2},\n"
+                "    }), flush=True)\n"
+                "emit(1, 'fetch', 'first day', 1)\n"
+                "time.sleep(0.5)\n"
+                "emit(2, 'fetch', 'second day', 2)\n"
+                "time.sleep(0.5)\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            app = create_app(
+                output_root=root / "runs",
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+
+            with TestClient(app) as client:
+                started = client.post(
+                    "/api/runs",
+                    json={"run_id": "live-run", "as_of": "2026-07-17"},
+                )
+                with client.websocket_connect(
+                    "/api/runs/live-run/events?after_sequence=0"
+                ) as websocket:
+                    first = websocket.receive_json()
+                    running = client.get("/api/runs/live-run").json()
+                    second = websocket.receive_json()
+
+            self.assertEqual(started.status_code, 202)
+            self.assertEqual(running["status"], "running")
+            self.assertEqual(first["message"], "first day")
+            self.assertEqual(second["message"], "second day")
+            self.assertEqual([first["sequence"], second["sequence"]], [1, 2])
+            self.assertEqual(
+                set(first),
+                {
+                    "schema_version",
+                    "run_id",
+                    "sequence",
+                    "timestamp",
+                    "module",
+                    "operation",
+                    "level",
+                    "message",
+                    "progress",
+                },
+            )
+
+    def test_reconnect_replays_only_the_durable_gap_then_continues_live(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fake_cli = root / "reconnect_cli.py"
+            fake_cli.write_text(
+                "import json, sys, time\n"
+                "run_id = sys.argv[sys.argv.index('--run-id') + 1]\n"
+                "for sequence in range(1, 4):\n"
+                "    print(json.dumps({\n"
+                "        'schema_version': '1.0', 'run_id': run_id,\n"
+                "        'sequence': sequence, 'timestamp': '2026-07-17T12:00:00+00:00',\n"
+                "        'module': 'trend-portfolio', 'operation': 'qualify',\n"
+                "        'level': 'info', 'message': f'event {sequence}',\n"
+                "    }), flush=True)\n"
+                "    time.sleep(0.25)\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            app = create_app(
+                output_root=root / "runs",
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+
+            with TestClient(app) as client:
+                client.post(
+                    "/api/runs",
+                    json={"run_id": "reconnect-run", "as_of": "2026-07-17"},
+                )
+                with client.websocket_connect(
+                    "/api/runs/reconnect-run/events?after_sequence=0"
+                ) as websocket:
+                    first = websocket.receive_json()
+                time.sleep(0.3)
+                with client.websocket_connect(
+                    "/api/runs/reconnect-run/events?after_sequence=1"
+                ) as websocket:
+                    missing = websocket.receive_json()
+                    live = websocket.receive_json()
+
+            self.assertEqual(first["sequence"], 1)
+            self.assertEqual(
+                [
+                    (missing["sequence"], missing["message"]),
+                    (live["sequence"], live["message"]),
+                ],
+                [(2, "event 2"), (3, "event 3")],
+            )
+
+    def test_backend_restart_recovers_event_history_by_run_and_sequence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output_root = root / "runs"
+            fake_cli = root / "history_cli.py"
+            fake_cli.write_text(
+                "import json, sys\n"
+                "run_id = sys.argv[sys.argv.index('--run-id') + 1]\n"
+                "for sequence in range(1, 4):\n"
+                "    print(json.dumps({\n"
+                "        'schema_version': '1.0', 'run_id': run_id,\n"
+                "        'sequence': sequence, 'timestamp': '2026-07-17T12:00:00+00:00',\n"
+                "        'module': 'run-publication', 'operation': 'write',\n"
+                "        'level': 'info', 'message': f'event {sequence}',\n"
+                "    }), flush=True)\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            first_app = create_app(
+                output_root=output_root,
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+            with TestClient(first_app) as client:
+                client.post(
+                    "/api/runs",
+                    json={"run_id": "recovered-run", "as_of": "2026-07-17"},
+                )
+                _wait_for_terminal(client, "recovered-run")
+
+            recovered_app = create_app(output_root=output_root)
+            with TestClient(recovered_app) as recovered_client:
+                with recovered_client.websocket_connect(
+                    "/api/runs/recovered-run/events?after_sequence=1"
+                ) as websocket:
+                    recovered = [websocket.receive_json(), websocket.receive_json()]
+
+            self.assertEqual(
+                [(event["sequence"], event["message"]) for event in recovered],
+                [(2, "event 2"), (3, "event 3")],
+            )
+
+    def test_malformed_cli_events_are_safely_normalized_without_stopping_reader(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fake_cli = root / "malformed_cli.py"
+            fake_cli.write_text(
+                "import json, sys\n"
+                "run_id = sys.argv[sys.argv.index('--run-id') + 1]\n"
+                "print('private malformed details', flush=True)\n"
+                "print(json.dumps({\n"
+                "    'schema_version': '1.0', 'run_id': run_id,\n"
+                "    'sequence': 2, 'timestamp': '2026-07-17T12:00:00+00:00',\n"
+                "    'module': 'wikimedia-evidence', 'operation': 'fetch',\n"
+                "    'level': 'info', 'message': 'invalid bounds',\n"
+                "    'progress': {'current': True, 'total': 2},\n"
+                "}), flush=True)\n"
+                "print(json.dumps({\n"
+                "    'schema_version': '1.0', 'run_id': run_id,\n"
+                "    'sequence': 3, 'timestamp': '2026-07-17T12:00:00+00:00',\n"
+                "    'module': 'wikimedia-evidence', 'operation': 'fetch',\n"
+                "    'level': 'info', 'message': 'valid event',\n"
+                "}), flush=True)\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            app = create_app(
+                output_root=root / "runs",
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+
+            with TestClient(app) as client:
+                client.post(
+                    "/api/runs",
+                    json={"run_id": "malformed-run", "as_of": "2026-07-17"},
+                )
+                terminal = _wait_for_terminal(client, "malformed-run")
+                with client.websocket_connect(
+                    "/api/runs/malformed-run/events?after_sequence=0"
+                ) as websocket:
+                    events = [
+                        websocket.receive_json(),
+                        websocket.receive_json(),
+                        websocket.receive_json(),
+                    ]
+
+            self.assertEqual(terminal["status"], "failed")
+            self.assertEqual([event["sequence"] for event in events], [1, 2, 3])
+            self.assertEqual(
+                [event["operation"] for event in events],
+                ["malformed-event", "malformed-event", "fetch"],
+            )
+            self.assertEqual(events[2]["message"], "valid event")
+            self.assertNotIn("private malformed details", json.dumps(events))
+
     def test_server_binds_to_loopback_by_default(self) -> None:
         with patch("uvicorn.run") as run:
             serve(output_root=Path("runs"))

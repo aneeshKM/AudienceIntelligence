@@ -61,6 +61,12 @@ server-owned process state after browser navigation or disconnection. A run is
 successful only when the CLI exits cleanly and the same run has a complete,
 schema-valid, integrity-checked Run Publication contract.
 
+`WS /api/runs/{run_id}/events?after_sequence=N` streams each validated JSON
+progress event as the CLI flushes it. The server durably records events before
+delivery, so reconnecting with the last received sequence replays only the
+missing suffix and then continues with live events. This history remains
+available after a server restart.
+
 Use a stable run identifier to resume interrupted Wikimedia work without
 refetching completed evidence:
 
