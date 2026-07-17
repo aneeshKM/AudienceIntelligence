@@ -6,17 +6,13 @@ import os
 from pathlib import Path
 import random
 import time
-from typing import Callable, Protocol
-from urllib import request
+from typing import Any, Callable, Protocol
 
+from groq import Groq
 import jsonschema
 
 from audience_trend_miner.configuration import DEFAULT_MODEL
-from audience_trend_miner.wikimedia import (
-    CanonicalArticle,
-    USER_AGENT,
-    trusted_ssl_context,
-)
+from audience_trend_miner.wikimedia import CanonicalArticle
 
 
 REJECTION_CLASSES = (
@@ -43,23 +39,6 @@ ARTICLE_JUDGMENT_SCHEMA: dict[str, object] = {
         "rejection_class": {"enum": list(REJECTION_CLASSES)},
         "rationale": {"type": "string", "minLength": 1},
     },
-    "allOf": [
-        {
-            "if": {"properties": {"rejection_class": {"const": "accepted"}}},
-            "then": {
-                "properties": {
-                    "supports_consumer_audience": {"const": True},
-                    "brand_safe": {"const": True},
-                }
-            },
-            "else": {
-                "anyOf": [
-                    {"properties": {"supports_consumer_audience": {"const": False}}},
-                    {"properties": {"brand_safe": {"const": False}}},
-                ]
-            },
-        }
-    ],
 }
 
 
@@ -137,6 +116,7 @@ def classify_article(
             jsonschema.validate(parsed_output, ARTICLE_JUDGMENT_SCHEMA)
             assert isinstance(parsed_output, dict)
             judgment = ArticleJudgment(**parsed_output)
+            _validate_article_judgment(judgment)
             attempts.append(
                 ClassificationAttempt(attempt_number, raw_output, True, None)
             )
@@ -172,6 +152,18 @@ def classify_article(
     )
 
 
+def _validate_article_judgment(judgment: ArticleJudgment) -> None:
+    if judgment.rejection_class == "accepted":
+        if not judgment.supports_consumer_audience or not judgment.brand_safe:
+            raise ValueError(
+                "an accepted judgment must support a consumer audience and be brand-safe"
+            )
+    elif judgment.supports_consumer_audience and judgment.brand_safe:
+        raise ValueError(
+            "a rejected judgment must fail consumer-audience or brand-safety validation"
+        )
+
+
 def _article_prompt(article: CanonicalArticle) -> str:
     return (
         "Decide whether this Wikipedia attention signal supports a commercially "
@@ -190,46 +182,35 @@ class GroqStructuredGenerator:
         *,
         api_key: str | None = None,
         model: str | None = None,
-        base_url: str = "https://api.groq.com/openai/v1/chat/completions",
+        client: Any | None = None,
     ) -> None:
         self.api_key = api_key or os.environ.get("GROQ_API_KEY", "")
         self.model = (
             model or os.environ.get("AUDIENCE_TREND_MINER_MODEL") or DEFAULT_MODEL
         )
-        self.base_url = base_url
+        self.client = client or Groq(
+            api_key=self.api_key,
+            max_retries=0,
+            timeout=60,
+        )
 
     def generate(self, prompt: str, schema: dict[str, object]) -> object:
-        if not self.api_key:
-            raise RuntimeError("GROQ_API_KEY is required for article classification")
-        body = json.dumps(
-            {
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "article_judgment",
-                        "strict": True,
-                        "schema": schema,
-                    },
+        completion = self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "article_judgment",
+                    "strict": True,
+                    "schema": schema,
                 },
-            }
-        ).encode()
-        api_request = request.Request(
-            self.base_url,
-            data=body,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": USER_AGENT,
             },
-            method="POST",
+            reasoning_effort="medium",
+            max_completion_tokens=2048,
+            stream=False,
         )
-        with request.urlopen(
-            api_request, timeout=60, context=trusted_ssl_context()
-        ) as response:
-            payload = json.load(response)
-        return payload["choices"][0]["message"]["content"]
+        return completion.choices[0].message.content
 
 
 class FixtureStructuredGenerator:

@@ -4,6 +4,7 @@ __pycache__/
 runs/
 build/
 audience_trend_miner.egg-info/
+refactor/
 .env
 .env.*
 !.env.example

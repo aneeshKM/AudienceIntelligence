@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import unittest
 from datetime import date, timedelta
 
@@ -11,12 +10,10 @@ from audience_trend_miner.evidence_jobs import (
 )
 from audience_trend_miner.resumable_wikimedia import acquire_resumable_wikimedia_attention
 from audience_trend_miner.wikimedia import AnalysisWindows, FixtureWikimediaAdapter
+from tests.postgres import test_database_url
 
 
-DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL",
-    "postgresql://postgres:test@localhost:55432/audience_intelligence_test",
-)
+DATABASE_URL = test_database_url()
 
 
 class EvidenceJobStoreTest(unittest.TestCase):

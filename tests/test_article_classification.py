@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-import json
 
 from audience_trend_miner.classification import (
     ArticleJudgment,
@@ -37,53 +37,47 @@ def judgment(rejection_class: str = "accepted") -> dict[str, object]:
 
 
 class ArticleClassificationTest(unittest.TestCase):
-    def test_groq_generator_uses_default_configurable_model_and_strict_schema(self) -> None:
-        class Response:
-            def __enter__(self) -> Response:
-                return self
-
-            def __exit__(self, *args: object) -> None:
-                return None
-
-            def read(self) -> bytes:
-                return json.dumps(
-                    {
-                        "choices": [
-                            {"message": {"content": json.dumps(judgment())}}
-                        ]
-                    }
-                ).encode()
-
-        captured: list[object] = []
-
-        ssl_context = MagicMock()
-
-        def fake_urlopen(
-            api_request: object, timeout: int, context: object
-        ) -> Response:
-            captured.extend((api_request, timeout, context))
-            return Response()
-
-        with (
-            patch("audience_trend_miner.classification.request.urlopen", fake_urlopen),
-            patch(
-                "audience_trend_miner.classification.trusted_ssl_context",
-                return_value=ssl_context,
-            ),
-        ):
-            output = GroqStructuredGenerator(api_key="secret").generate(
-                "Classify this", {"type": "object"}
-            )
-
-        request_body = json.loads(captured[0].data)
-        self.assertEqual(json.loads(output), judgment())
-        self.assertEqual(request_body["model"], DEFAULT_MODEL)
-        self.assertTrue(request_body["response_format"]["json_schema"]["strict"])
-        self.assertEqual(
-            captured[0].get_header("User-agent"),
-            "AudienceTrendMiner/0.1 (https://github.com/aneeshKM/AudienceIntelligence)",
+    def test_groq_generator_requests_strict_judgment_and_returns_raw_content(self) -> None:
+        raw_content = '{"supports_consumer_audience":true}'
+        completions = MagicMock()
+        completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=raw_content))]
         )
-        self.assertIs(captured[2], ssl_context)
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=completions),
+        )
+        schema: dict[str, object] = {"type": "object"}
+
+        output = GroqStructuredGenerator(client=client).generate(
+            "Classify this", schema
+        )
+
+        self.assertEqual(output, raw_content)
+        completions.create.assert_called_once_with(
+            model=DEFAULT_MODEL,
+            messages=[{"role": "user", "content": "Classify this"}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "article_judgment",
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+            reasoning_effort="medium",
+            max_completion_tokens=2048,
+            stream=False,
+        )
+
+    def test_groq_generator_keeps_network_policy_under_application_control(self) -> None:
+        with patch("audience_trend_miner.classification.Groq") as groq:
+            GroqStructuredGenerator(api_key="secret")
+
+        groq.assert_called_once_with(
+            api_key="secret",
+            max_retries=0,
+            timeout=60,
+        )
 
     def test_accepts_a_complete_schema_valid_commercial_judgment(self) -> None:
         generator = ScriptedGenerator(judgment())
@@ -119,6 +113,22 @@ class ArticleClassificationTest(unittest.TestCase):
                 )
                 self.assertFalse(result.accepted)
                 self.assertEqual(result.judgment.rejection_class, rejection_class)
+
+    def test_retries_cross_field_inconsistency_in_strict_judgment(self) -> None:
+        inconsistent = judgment()
+        inconsistent["brand_safe"] = False
+        generator = ScriptedGenerator(inconsistent, judgment())
+
+        result = classify_article(
+            article("Running shoes", 70_000, 140_000),
+            generator,
+            sleep=lambda _: None,
+        )
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(len(result.attempts), 2)
+        self.assertFalse(result.attempts[0].validation_valid)
+        self.assertIn("accepted judgment must", result.attempts[0].error or "")
 
     def test_retries_invalid_output_then_recovers_without_accepting_partial_data(self) -> None:
         generator = ScriptedGenerator(

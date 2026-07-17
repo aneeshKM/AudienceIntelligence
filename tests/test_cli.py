@@ -9,10 +9,10 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL",
-    "postgresql://postgres:test@localhost:55432/audience_intelligence_test",
-)
+from tests.postgres import test_database_url
+
+
+TEST_DATABASE_URL = test_database_url()
 
 
 def empty_run_environment() -> dict[str, str]:

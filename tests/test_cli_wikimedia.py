@@ -9,11 +9,10 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
+from tests.postgres import test_database_url
 
-TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL",
-    "postgresql://postgres:test@localhost:55432/audience_intelligence_test",
-)
+
+TEST_DATABASE_URL = test_database_url()
 
 
 def fixture_payload() -> dict[str, object]:
