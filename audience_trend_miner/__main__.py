@@ -19,6 +19,8 @@ def main() -> int:
         return _cluster_adjudication_main(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "v2-trend-portfolio":
         return _trend_portfolio_main(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "v2-run-publication":
+        return _run_publication_main(sys.argv[2:])
     parser = argparse.ArgumentParser(prog="audience-trend-miner")
     parser.add_argument("--as-of", type=date.fromisoformat, required=False)
     parser.add_argument("--output-dir", type=Path, default=Path("runs"))
@@ -313,6 +315,53 @@ def _trend_portfolio_main(arguments: list[str]) -> int:
             adapter_factory=adapter_factory,
             progress_sink=_v2_progress_sink(parsed.progress_format),
             interrupt_before_completion=parsed.interrupt_before_completion,
+        )
+    )
+
+
+def _run_publication_main(arguments: list[str]) -> int:
+    from audience_trend_miner.v2.run_publication import execute_run_publication
+
+    parser = argparse.ArgumentParser(
+        prog="audience-trend-miner v2-run-publication"
+    )
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--wikimedia-evidence", type=Path)
+    parser.add_argument("--semantic-audience-formation", type=Path)
+    parser.add_argument("--cluster-adjudication", type=Path)
+    parser.add_argument("--trend-portfolio", type=Path)
+    parser.add_argument(
+        "--progress-format", choices=("human", "json"), default="human"
+    )
+    parser.add_argument(
+        "--interrupt-before-completion", action="store_true", help=argparse.SUPPRESS
+    )
+    parser.add_argument(
+        "--fail-after-artifact",
+        type=int,
+        choices=(1, 2, 3),
+        help=argparse.SUPPRESS,
+    )
+    parsed = parser.parse_args(arguments)
+    supplied_paths = {
+        stage: path
+        for stage, path in {
+            "wikimedia-evidence": parsed.wikimedia_evidence,
+            "semantic-audience-formation": parsed.semantic_audience_formation,
+            "cluster-adjudication": parsed.cluster_adjudication,
+            "trend-portfolio": parsed.trend_portfolio,
+        }.items()
+        if path is not None
+    }
+    return _execute_v2(
+        lambda: execute_run_publication(
+            run_id=parsed.run_id,
+            output_root=parsed.output_dir,
+            progress_sink=_v2_progress_sink(parsed.progress_format),
+            upstream_paths=supplied_paths,
+            interrupt_before_completion=parsed.interrupt_before_completion,
+            fail_after_artifact=parsed.fail_after_artifact,
         )
     )
 

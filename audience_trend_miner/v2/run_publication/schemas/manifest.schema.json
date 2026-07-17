@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "as_of_date", "nominal_windows", "configuration_provenance", "modules", "schemas", "published_artifacts", "integrity", "completion"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "as_of_date": {"type": "string", "format": "date"},
+    "nominal_windows": {"type": "object"},
+    "configuration_provenance": {"type": "object"},
+    "modules": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "additionalProperties": {"$ref": "#/$defs/module"}
+    },
+    "schemas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["portfolio.json", "audit.json", "manifest.json"],
+      "properties": {
+        "portfolio.json": {"const": "1.0"},
+        "audit.json": {"const": "1.0"},
+        "manifest.json": {"const": "1.0"}
+      }
+    },
+    "published_artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["portfolio.json", "audit.json"],
+      "properties": {
+        "portfolio.json": {"$ref": "#/$defs/integrity"},
+        "audit.json": {"$ref": "#/$defs/integrity"}
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "encoding", "manifest_excludes_self"],
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "encoding": {"const": "utf-8"},
+        "manifest_excludes_self": {"const": true}
+      }
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {"status": {"const": "complete"}}
+    }
+  },
+  "$defs": {
+    "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "artifact_schema_version", "sha256"],
+      "properties": {
+        "status": {"const": "complete"},
+        "artifact_schema_version": {"const": "2.0"},
+        "sha256": {"$ref": "#/$defs/fingerprint"}
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "sha256", "bytes"],
+      "properties": {
+        "schema_version": {"const": "1.0"},
+        "sha256": {"$ref": "#/$defs/fingerprint"},
+        "bytes": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}
