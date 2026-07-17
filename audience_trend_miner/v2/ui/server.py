@@ -77,6 +77,15 @@ class _RunSupervisor:
                     stderr=subprocess.DEVNULL,
                 )
             except OSError as error:
+                self._states[request.run_id] = _RunState(
+                    run_id=request.run_id,
+                    as_of=request.as_of,
+                    status="failed",
+                    failure={
+                        "code": "cli_start_failed",
+                        "message": "The run command could not be started.",
+                    },
+                )
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="The run command could not be started.",
@@ -118,6 +127,7 @@ class _RunSupervisor:
                 validate_completed_publication(
                     self._output_root / state.run_id / "publication",
                     run_id=state.run_id,
+                    as_of_date=state.as_of,
                 )
             except V2ContractError:
                 state.status = "failed"

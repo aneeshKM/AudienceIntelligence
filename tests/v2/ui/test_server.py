@@ -239,6 +239,37 @@ class RunServerTest(unittest.TestCase):
                 },
             )
 
+    def test_cli_start_failure_is_retained_as_sanitized_terminal_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            app = create_app(
+                output_root=root / "runs",
+                cli_command=(str(root / "missing-cli"),),
+            )
+
+            with TestClient(app) as client:
+                failed_start = client.post(
+                    "/api/runs",
+                    json={"run_id": "unstarted-run", "as_of": "2026-07-17"},
+                )
+                retained = client.get("/api/runs/unstarted-run")
+
+            self.assertEqual(failed_start.status_code, 503)
+            self.assertEqual(
+                retained.json(),
+                {
+                    "run_id": "unstarted-run",
+                    "as_of": "2026-07-17",
+                    "status": "failed",
+                    "exit_code": None,
+                    "failure": {
+                        "code": "cli_start_failed",
+                        "message": "The run command could not be started.",
+                    },
+                },
+            )
+            self.assertNotIn(str(root), json.dumps(retained.json()))
+
     def test_success_requires_zero_exit_and_valid_same_run_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -269,6 +300,31 @@ class RunServerTest(unittest.TestCase):
                     "failure": None,
                 },
             )
+
+    def test_success_rejects_publication_for_a_different_as_of_date(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output_root = root / "runs"
+            _write_completed_publication(output_root, "stale-run")
+            fake_cli = root / "successful_cli.py"
+            fake_cli.write_text("raise SystemExit(0)\n", encoding="utf-8")
+            app = create_app(
+                output_root=output_root,
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+
+            with TestClient(app) as client:
+                client.post(
+                    "/api/runs",
+                    json={"run_id": "stale-run", "as_of": "2026-07-18"},
+                )
+                terminal = _wait_for_terminal(client, "stale-run")
+
+            self.assertEqual(terminal["status"], "failed")
+            failure = terminal["failure"]
+            self.assertIsInstance(failure, dict)
+            assert isinstance(failure, dict)
+            self.assertEqual(failure["code"], "publication_incomplete")
 
 
 if __name__ == "__main__":

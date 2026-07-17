@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import json
 import os
@@ -70,13 +70,23 @@ FORBIDDEN_KEYS = frozenset(
 )
 
 
-def validate_completed_publication(directory: Path, *, run_id: str) -> None:
+def validate_completed_publication(
+    directory: Path,
+    *,
+    run_id: str,
+    as_of_date: date | None = None,
+) -> None:
     """Validate the final contract exposed to downstream product consumers."""
     validate_identifier(run_id, "run_id")
     try:
-        _load_completed_publication(directory, run_id)
+        products = _load_completed_publication(directory, run_id)
     except (OSError, json.JSONDecodeError, jsonschema.ValidationError) as error:
         raise V2ContractError("publication contract is incomplete") from error
+    if (
+        as_of_date is not None
+        and products["portfolio.json"]["as_of_date"] != as_of_date.isoformat()
+    ):
+        raise V2ContractError("publication belongs to a different As-of Date")
 
 
 def execute_run_publication(
