@@ -214,27 +214,29 @@ def execute_wikimedia_evidence(
                 progress=BoundedProgress(offset, total_progress),
             )
         )
-    facts: dict[str, dict[str, object]] = {}
-    pages: dict[int, dict[str, object]] = {}
+    canonical_metadata_by_alias: dict[str, dict[str, object]] = {}
+    canonical_metadata_by_page_id: dict[int, dict[str, object]] = {}
     unavailable_titles: set[str] = set()
     for result in metadata_results:
         if isinstance(result, FailedEvidence):
             unavailable_titles.update(json.loads(result.subject))
             continue
         for page in result.evidence["pages"]:
-            pages[int(page["page_id"])] = page
+            canonical_metadata_by_page_id[int(page["page_id"])] = page
         unavailable_titles.update(result.evidence["unavailable_titles"])
         for alias, page_id in result.evidence["aliases"].items():
-            facts[alias] = pages[int(page_id)]
+            canonical_metadata_by_alias[alias] = canonical_metadata_by_page_id[
+                int(page_id)
+            ]
     for title in unavailable_titles:
-        facts[title] = {"unavailable": True}
+        canonical_metadata_by_alias[title] = {"unavailable": True}
 
     observations_by_alias: dict[str, list[dict[str, object]]] = {}
     nominal_days: list[dict[str, object]] = []
     daily_cutoffs: list[dict[str, object]] = []
     unavailable_days: list[str] = []
     coverage = {"previous": 0, "current": 0}
-    non_en = 0
+    non_en_wikipedia_records = 0
     for day, result in zip(days, country_results):
         day_text = day.isoformat()
         window = "previous" if day <= previous_end else "current"
@@ -245,13 +247,13 @@ def execute_wikimedia_evidence(
         coverage[window] += 1
         nominal_days.append({"date": day_text, "window": window, "status": "successful"})
         daily_cutoffs.append({"date": day_text, "views_ceil": result.evidence["daily_cutoff_views_ceil"]})
-        non_en += int(result.evidence["non_en_wikipedia_records"])
+        non_en_wikipedia_records += int(result.evidence["non_en_wikipedia_records"])
         for record in result.evidence["records"]:
             observations_by_alias.setdefault(str(record["article"]), []).append(
                 {"date": day_text, "views_ceil": int(record["views_ceil"])}
             )
     canonical_pages, metadata_exclusions = _canonicalize(
-        set(candidate_titles), observations_by_alias, facts
+        set(candidate_titles), observations_by_alias, canonical_metadata_by_alias
     )
     payload = {
         "as_of_date": as_of_date.isoformat(),
@@ -265,7 +267,7 @@ def execute_wikimedia_evidence(
         "canonical_pages": canonical_pages,
         "daily_cutoffs": daily_cutoffs,
         "provenance": {"source": "wikimedia:top-per-country/US+action-query", "country": "US", "project": "en.wikipedia", "traffic_measure": "views_ceil"},
-        "exclusions": {"non_en_wikipedia_records": non_en, "unavailable_days": unavailable_days, **metadata_exclusions},
+        "exclusions": {"non_en_wikipedia_records": non_en_wikipedia_records, "unavailable_days": unavailable_days, **metadata_exclusions},
         "completion": {"status": "complete", "minimum_successful_days_per_window": MINIMUM_SUCCESSFUL_DAYS},
     }
     artifact = {"schema_version": ARTIFACT_SCHEMA_VERSION, "run_id": run_id, "stage": STAGE, "status": "complete", "payload": payload}

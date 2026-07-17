@@ -68,7 +68,10 @@ class HttpWikimediaAdapterTest(unittest.TestCase):
                     return {
                         "continue": {"clcontinue": "42|Later", "continue": "||"},
                         "query": {
-                            "redirects": [{"from": "Alias_A", "to": "Canonical A"}],
+                            "redirects": [
+                                {"from": "Alias_A", "to": "Intermediate"},
+                                {"from": "Intermediate", "to": "Canonical A"},
+                            ],
                             "pages": [{"pageid": 42, "title": "Canonical A", "extract": "x" * 650, "categories": [{"title": "Category:First"}]}],
                         },
                     }

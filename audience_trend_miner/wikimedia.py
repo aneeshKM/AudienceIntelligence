@@ -400,7 +400,10 @@ class HttpWikimediaAdapter:
         aliases: dict[str, int] = {}
         for requested in titles:
             resolved = normalized.get(requested, requested)
-            resolved = redirects.get(resolved, resolved)
+            visited: set[str] = set()
+            while resolved in redirects and resolved not in visited:
+                visited.add(resolved)
+                resolved = redirects[resolved]
             if resolved in page_ids_by_title:
                 aliases[requested] = page_ids_by_title[resolved]
         return MetadataBatchResponse(
