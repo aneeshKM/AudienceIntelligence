@@ -6,6 +6,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Mapping, Protocol
 
+import jsonschema
+
 from audience_trend_miner.v2.wikimedia_evidence.jobs import (
     CompletedEvidence,
     EvidenceJob,
@@ -30,6 +32,7 @@ from audience_trend_miner.v2.shared import (
     ProgressSink,
     V2ContractError,
     atomic_write_json,
+    consume_artifact,
     record_run_configuration,
     validate_artifact,
     validate_identifier,
@@ -44,6 +47,18 @@ SCHEMA_PATH = Path(__file__).with_name("schemas") / "wikimedia-evidence.schema.j
 
 class CountryTopPagesAdapter(Protocol):
     def daily_country_top_pages(self, day: date) -> CountryTopPagesResponse: ...
+
+
+def consume_wikimedia_evidence(path: Path, *, run_id: str) -> dict[str, object]:
+    """Load completed, schema-compatible Wikimedia Evidence for a downstream stage."""
+    artifact = consume_artifact(path, run_id=run_id, stage=STAGE)
+    try:
+        validate_schema(SCHEMA_PATH, artifact["payload"])
+    except jsonschema.ValidationError as error:
+        raise V2ContractError(
+            f"Wikimedia Evidence is schema-incompatible: {error.message}"
+        ) from error
+    return artifact
 
 
 def acquire_country_days(
@@ -267,7 +282,7 @@ def execute_wikimedia_evidence(
         "candidate_universe": candidate_titles,
         "canonical_pages": canonical_pages,
         "daily_cutoffs": daily_cutoffs,
-        "provenance": {"source": "wikimedia:top-per-country/US+action-query", "country": "US", "project": "en.wikipedia", "traffic_measure": "views_ceil"},
+        "provenance": {"source": "wikimedia:top-per-country/US+action-query", "country": "US", "project": "en.wikipedia", "traffic_measure": "views_ceil", "category_visibility": "non-hidden"},
         "exclusions": {"non_en_wikipedia_records": non_en_wikipedia_records, "unavailable_days": unavailable_days, **metadata_exclusions},
         "completion": {"status": "complete", "minimum_successful_days_per_window": MINIMUM_SUCCESSFUL_DAYS},
     }
@@ -412,6 +427,7 @@ def execute_wikimedia_evidence_fixture(
             "country": "US",
             "project": "en.wikipedia",
             "traffic_measure": "views_ceil",
+            "category_visibility": "non-hidden",
         },
         "exclusions": {
             "non_en_wikipedia_records": non_en_wikipedia_records,

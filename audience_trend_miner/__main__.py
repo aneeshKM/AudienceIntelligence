@@ -13,6 +13,8 @@ def main() -> int:
         return _fixture_stage_main(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "v2-wikimedia-evidence":
         return _wikimedia_evidence_main(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "v2-semantic-audience-formation":
+        return _semantic_audience_formation_main(sys.argv[2:])
     parser = argparse.ArgumentParser(prog="audience-trend-miner")
     parser.add_argument("--as-of", type=date.fromisoformat, required=False)
     parser.add_argument("--output-dir", type=Path, default=Path("runs"))
@@ -69,6 +71,30 @@ def _wikimedia_evidence_main(arguments: list[str]) -> int:
             as_of_date=parsed.as_of,
             output_root=parsed.output_dir,
             fixture_path=parsed.fixture,
+            progress_sink=sink,
+        )
+    )
+
+
+def _semantic_audience_formation_main(arguments: list[str]) -> int:
+    from audience_trend_miner.v2.semantic_audience_formation import (
+        execute_category_selection,
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="audience-trend-miner v2-semantic-audience-formation"
+    )
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--wikimedia-evidence", type=Path)
+    parser.add_argument("--progress-format", choices=("human", "json"), default="human")
+    parsed = parser.parse_args(arguments)
+    sink = _v2_progress_sink(parsed.progress_format)
+    return _execute_v2(
+        lambda: execute_category_selection(
+            run_id=parsed.run_id,
+            output_root=parsed.output_dir,
+            wikimedia_evidence_path=parsed.wikimedia_evidence,
             progress_sink=sink,
         )
     )

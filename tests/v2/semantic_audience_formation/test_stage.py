@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+WIKIMEDIA_FIXTURE = Path(__file__).parents[1] / "fixtures" / "v2_wikimedia_evidence.json"
+
+
+def run_stage(output_dir: Path, run_id: str = "formation-run") -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "audience_trend_miner",
+            "v2-semantic-audience-formation",
+            "--run-id",
+            run_id,
+            "--output-dir",
+            str(output_dir),
+            "--progress-format",
+            "json",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def publish_wikimedia_evidence(output_dir: Path, run_id: str = "formation-run") -> Path:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "audience_trend_miner",
+            "v2-wikimedia-evidence",
+            "--run-id",
+            run_id,
+            "--as-of",
+            "2026-07-17",
+            "--output-dir",
+            str(output_dir),
+            "--fixture",
+            str(WIKIMEDIA_FIXTURE),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode:
+        raise AssertionError(completed.stderr)
+    return output_dir / run_id / "wikimedia-evidence.json"
+
+
+class SemanticAudienceFormationStageTest(unittest.TestCase):
+    def test_stage_consumes_completed_wikimedia_evidence_without_reacquisition(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            publish_wikimedia_evidence(output_dir)
+
+            completed = run_stage(output_dir)
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            events = [json.loads(line) for line in completed.stdout.splitlines()]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["module"], "semantic-audience-formation")
+            self.assertEqual(events[0]["operation"], "select-categories")
+            self.assertIn("rule set 1.0", events[0]["message"])
+            self.assertEqual(events[0]["progress"], {"current": 2, "total": 2})
+
+            artifact = json.loads(
+                (output_dir / "formation-run" / "wikimedia-evidence.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                artifact["payload"]["provenance"]["category_visibility"],
+                "non-hidden",
+            )
+
+    def test_stage_rejects_absent_incomplete_incompatible_and_mismatched_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            artifact_path = publish_wikimedia_evidence(output_dir)
+            valid_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            scenarios = (
+                ("absent", None, "artifact is absent"),
+                ("incomplete", {**valid_artifact, "status": "writing"}, "artifact is incomplete"),
+                ("incompatible", {**valid_artifact, "schema_version": "1.0"}, "schema-invalid"),
+                (
+                    "missing hidden-category guarantee",
+                    {
+                        **valid_artifact,
+                        "payload": {
+                            **valid_artifact["payload"],
+                            "provenance": {
+                                key: value
+                                for key, value in valid_artifact["payload"][
+                                    "provenance"
+                                ].items()
+                                if key != "category_visibility"
+                            },
+                        },
+                    },
+                    "schema-incompatible",
+                ),
+                ("mismatched", {**valid_artifact, "run_id": "another-run"}, "different run facts"),
+            )
+
+            for name, artifact, expected_error in scenarios:
+                with self.subTest(name=name):
+                    artifact_path.unlink(missing_ok=True)
+                    if artifact is not None:
+                        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+                    completed = run_stage(output_dir)
+
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertIn(expected_error, completed.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
