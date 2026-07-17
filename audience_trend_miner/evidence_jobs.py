@@ -43,6 +43,7 @@ class FailedEvidence:
 
 TerminalEvidence = CompletedEvidence | FailedEvidence
 COUNTRY_DAY_OPERATION = "country-day"
+METADATA_BATCH_OPERATION = "metadata-batch"
 
 
 class EvidenceJobStore:
@@ -107,6 +108,9 @@ class EvidenceJobStore:
 
     def schedule_country_days(self, run_id: str, subjects: tuple[str, ...]) -> None:
         self._schedule(run_id, COUNTRY_DAY_OPERATION, subjects)
+
+    def schedule_metadata_batches(self, run_id: str, subjects: tuple[str, ...]) -> None:
+        self._schedule(run_id, METADATA_BATCH_OPERATION, subjects)
 
     def schedule_alias_evidence(
         self, run_id: str, subjects: tuple[str, ...]

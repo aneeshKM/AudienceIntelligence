@@ -152,6 +152,13 @@ class MetadataResponse:
 
 
 @dataclass(frozen=True)
+class MetadataBatchResponse:
+    pages: tuple[MetadataResponse, ...]
+    aliases: Mapping[str, int]
+    unavailable_titles: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class AliasEvidence:
     traffic: AliasTraffic
     metadata: MetadataResponse
@@ -329,6 +336,89 @@ class HttpWikimediaAdapter:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise WikimediaTransientError("invalid metadata response") from error
+
+    def metadata_batch(self, titles: tuple[str, ...]) -> MetadataBatchResponse:
+        if not titles or len(titles) > 50:
+            raise ValueError("metadata batches require between 1 and 50 titles")
+        parameters: dict[str, object] = {
+            "action": "query",
+            "format": "json",
+            "formatversion": 2,
+            "maxlag": 5,
+            "redirects": 1,
+            "converttitles": 1,
+            "prop": "extracts|categories",
+            "exintro": 1,
+            "explaintext": 1,
+            "clshow": "!hidden",
+            "cllimit": "max",
+            "titles": "|".join(titles),
+        }
+        pages: dict[int, dict[str, object]] = {}
+        redirects: dict[str, str] = {}
+        normalized: dict[str, str] = {}
+        missing: set[str] = set()
+        while True:
+            raw = self._transport.get_json(
+                f"{self._action_api_url}?{urlencode(parameters)}"
+            )
+            try:
+                query = raw["query"]
+                for item in query.get("normalized", []):
+                    normalized[str(item["from"])] = str(item["to"])
+                for item in query.get("redirects", []):
+                    redirects[str(item["from"])] = str(item["to"])
+                for item in query["pages"]:
+                    if item.get("missing") is True:
+                        missing.add(str(item["title"]))
+                        continue
+                    page_id = int(item["pageid"])
+                    accumulated = pages.setdefault(
+                        page_id,
+                        {
+                            "title": str(item["title"]),
+                            "extract": "",
+                            "categories": set(),
+                        },
+                    )
+                    if "extract" in item:
+                        accumulated["extract"] = str(item["extract"])[:600]
+                    accumulated["categories"].update(
+                        str(category["title"]).removeprefix("Category:")
+                        for category in item.get("categories", [])
+                    )
+                continuation = raw.get("continue")
+            except (KeyError, TypeError, ValueError) as error:
+                raise WikimediaTransientError("invalid metadata batch response") from error
+            if not isinstance(continuation, dict):
+                break
+            parameters.update(continuation)
+
+        page_ids_by_title = {
+            str(page["title"]): page_id for page_id, page in pages.items()
+        }
+        aliases: dict[str, int] = {}
+        for requested in titles:
+            resolved = normalized.get(requested, requested)
+            resolved = redirects.get(resolved, resolved)
+            if resolved in page_ids_by_title:
+                aliases[requested] = page_ids_by_title[resolved]
+        return MetadataBatchResponse(
+            pages=tuple(
+                MetadataResponse(
+                    page_id,
+                    str(page["title"]),
+                    str(page["extract"]),
+                    tuple(sorted(page["categories"])),
+                    {},
+                )
+                for page_id, page in sorted(pages.items())
+            ),
+            aliases=aliases,
+            unavailable_titles=tuple(
+                sorted(title for title in titles if title not in aliases or title in missing)
+            ),
+        )
 
 
 class FixtureWikimediaAdapter:

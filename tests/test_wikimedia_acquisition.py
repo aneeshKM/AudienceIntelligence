@@ -4,6 +4,7 @@ import unittest
 from datetime import date
 from io import BytesIO
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 from audience_trend_miner.wikimedia import (
     HttpWikimediaAdapter,
@@ -56,6 +57,38 @@ class RecordingJsonTransport:
 
 
 class HttpWikimediaAdapterTest(unittest.TestCase):
+    def test_metadata_batch_follows_continuation_and_preserves_alias_lineage(self) -> None:
+        class ContinuingTransport:
+            def __init__(self):
+                self.urls = []
+
+            def get_json(self, url):
+                self.urls.append(url)
+                if len(self.urls) == 1:
+                    return {
+                        "continue": {"clcontinue": "42|Later", "continue": "||"},
+                        "query": {
+                            "redirects": [{"from": "Alias_A", "to": "Canonical A"}],
+                            "pages": [{"pageid": 42, "title": "Canonical A", "extract": "x" * 650, "categories": [{"title": "Category:First"}]}],
+                        },
+                    }
+                return {"query": {"pages": [{"pageid": 42, "title": "Canonical A", "categories": [{"title": "Category:Later"}]}]}}
+
+        transport = ContinuingTransport()
+        result = HttpWikimediaAdapter(transport=transport).metadata_batch(("Alias_A", "Missing"))
+
+        self.assertEqual(len(transport.urls), 2)
+        first = parse_qs(urlparse(transport.urls[0]).query)
+        self.assertEqual(first["titles"], ["Alias_A|Missing"])
+        self.assertEqual(first["clshow"], ["!hidden"])
+        self.assertEqual(first["cllimit"], ["max"])
+        self.assertEqual(first["maxlag"], ["5"])
+        second = parse_qs(urlparse(transport.urls[1]).query)
+        self.assertEqual(second["clcontinue"], ["42|Later"])
+        self.assertEqual(result.pages[0].extract, "x" * 600)
+        self.assertEqual(result.pages[0].categories, ("First", "Later"))
+        self.assertEqual(result.aliases, {"Alias_A": 42})
+
     def test_country_top_pages_uses_us_all_access_contract(self) -> None:
         transport = RecordingJsonTransport()
         adapter = HttpWikimediaAdapter(transport=transport)

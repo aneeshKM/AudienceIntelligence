@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import unittest
 from datetime import date, timedelta
+import tempfile
+from pathlib import Path
+import json
 
 from audience_trend_miner.evidence_jobs import (
     CompletedEvidence,
@@ -10,7 +13,7 @@ from audience_trend_miner.evidence_jobs import (
 )
 from audience_trend_miner.resumable_wikimedia import acquire_resumable_wikimedia_attention
 from audience_trend_miner.wikimedia import AnalysisWindows, FixtureWikimediaAdapter
-from audience_trend_miner.v2_wikimedia_evidence import acquire_country_days
+from audience_trend_miner.v2_wikimedia_evidence import acquire_country_days, execute_wikimedia_evidence
 from tests.postgres import test_database_url
 
 
@@ -263,6 +266,29 @@ class EvidenceJobStoreTest(unittest.TestCase):
                 workers=2,
             )
 
+    def test_production_stage_resolves_metadata_batches_publishes_and_resumes(self) -> None:
+        adapter = ProductionCountryAdapter()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            first = execute_wikimedia_evidence(
+                run_id="production-stage", as_of_date=date(2026, 7, 17),
+                output_root=root, adapter=adapter, store=self.store,
+                progress_sink=lambda event: None, workers=2,
+            )
+            calls = adapter.calls
+            second = execute_wikimedia_evidence(
+                run_id="production-stage", as_of_date=date(2026, 7, 17),
+                output_root=root, adapter=adapter, store=self.store,
+                progress_sink=lambda event: None, workers=2,
+            )
+
+            self.assertEqual(first, second)
+            self.assertEqual(adapter.calls, calls)
+            payload = json.loads(first.read_text())["payload"]
+            self.assertEqual(payload["canonical_pages"][0]["lead"], "Lead")
+            self.assertEqual(payload["canonical_pages"][0]["categories"], ["Visible"])
+            self.assertEqual(payload["exclusions"]["metadata_pages_unavailable"], 0)
+
 
 class CountryAdapter:
     def __init__(self, unavailable=None) -> None:
@@ -289,6 +315,21 @@ class CountryAdapter:
                 CountryPageviewRecord("de.wikipedia", "Andere", 100),
             ),
             {"day": day_text},
+        )
+
+
+class ProductionCountryAdapter(CountryAdapter):
+    def __init__(self):
+        super().__init__(unavailable=set())
+
+    def metadata_batch(self, titles):
+        from audience_trend_miner.wikimedia import MetadataBatchResponse, MetadataResponse
+
+        self.calls += 1
+        return MetadataBatchResponse(
+            (MetadataResponse(42, "Canonical Page", "Lead", ("Visible",), {}),),
+            {title: 42 for title in titles},
+            (),
         )
 
 

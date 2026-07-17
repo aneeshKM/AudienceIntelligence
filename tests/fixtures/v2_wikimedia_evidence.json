@@ -18,8 +18,8 @@
     "2026-07-15": {"records": [{"project": "en.wikipedia", "article": "Alias_A", "views_ceil": 240}]}
   },
   "canonical_pages": {
-    "Alias_A": {"page_id": 42, "canonical_title": "Canonical A"},
-    "Canonical_A": {"page_id": 42, "canonical_title": "Canonical A"},
-    "Alias_B": {"page_id": 84, "canonical_title": "Canonical B"}
+    "Alias_A": {"page_id": 42, "canonical_title": "Canonical A", "lead": "A long canonical lead used for semantic evidence.", "categories": ["Useful", "Visible"]},
+    "Canonical_A": {"page_id": 42, "canonical_title": "Canonical A", "lead": "A long canonical lead used for semantic evidence.", "categories": ["Visible", "Useful"]},
+    "Alias_B": {"page_id": 84, "canonical_title": "Canonical B", "lead": "A second lead.", "categories": ["Other"]}
   }
 }

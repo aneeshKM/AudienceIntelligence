@@ -57,6 +57,11 @@ class V2WikimediaEvidenceCliTest(unittest.TestCase):
                 [(page["page_id"], page["aliases"]) for page in payload["canonical_pages"]],
                 [(42, ["Alias_A", "Canonical_A"]), (84, ["Alias_B"])],
             )
+            self.assertEqual(payload["canonical_pages"][0]["lead"], "A long canonical lead used for semantic evidence.")
+            self.assertEqual(payload["canonical_pages"][0]["categories"], ["Useful", "Visible"])
+            self.assertEqual(payload["exclusions"]["metadata_pages_unavailable"], 0)
+            self.assertEqual(payload["exclusions"]["main_page"], 0)
+            self.assertEqual(payload["exclusions"]["internal_namespaces"], {})
             observations = payload["canonical_pages"][0]["observations"]
             self.assertEqual(
                 observations,
@@ -79,6 +84,37 @@ class V2WikimediaEvidenceCliTest(unittest.TestCase):
             }
             self.assertEqual(cutoffs["2026-07-02"], 90)
             self.assertEqual(cutoffs["2026-07-06"], None)
+
+    def test_metadata_exclusions_and_unavailability_are_neutral_and_deterministic(self) -> None:
+        fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        fixture["daily_responses"]["2026-07-02"]["records"].extend(
+            [
+                {"project": "en.wikipedia", "article": "Main_Page", "views_ceil": 100},
+                {"project": "en.wikipedia", "article": "Special:Search", "views_ceil": 100},
+                {"project": "en.wikipedia", "article": "Unavailable", "views_ceil": 100},
+            ]
+        )
+        fixture["canonical_pages"].update(
+            {
+                "Main_Page": {"page_id": 1, "canonical_title": "Main Page", "lead": "", "categories": []},
+                "Special:Search": {"page_id": -1, "canonical_title": "Special:Search", "lead": "", "categories": []},
+                "Unavailable": {"unavailable": True},
+            }
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fixture_path = root / "fixture.json"
+            fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, "-m", "audience_trend_miner", "v2-wikimedia-evidence", "--run-id", "filtered", "--as-of", "2026-07-17", "--output-dir", str(root / "runs"), "--fixture", str(fixture_path)],
+                check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads((root / "runs" / "filtered" / "wikimedia-evidence.json").read_text())["payload"]
+            self.assertEqual(payload["exclusions"]["metadata_pages_unavailable"], 1)
+            self.assertEqual(payload["exclusions"]["main_page"], 1)
+            self.assertEqual(payload["exclusions"]["internal_namespaces"], {"special": 1})
+            self.assertEqual([page["page_id"] for page in payload["canonical_pages"]], [42, 84])
 
     def test_stage_rejects_an_effective_window_below_minimum_coverage(self) -> None:
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))

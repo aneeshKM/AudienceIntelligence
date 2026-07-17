@@ -44,10 +44,12 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["page_id", "canonical_title", "aliases", "observations"],
+        "required": ["page_id", "canonical_title", "lead", "categories", "aliases", "observations"],
         "properties": {
           "page_id": {"type": "integer"},
           "canonical_title": {"type": "string", "minLength": 1},
+          "lead": {"type": "string", "maxLength": 600},
+          "categories": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
           "aliases": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
           "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}}
         }
@@ -79,10 +81,13 @@
     "exclusions": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["non_en_wikipedia_records", "unavailable_days"],
+      "required": ["non_en_wikipedia_records", "unavailable_days", "metadata_pages_unavailable", "main_page", "internal_namespaces"],
       "properties": {
         "non_en_wikipedia_records": {"type": "integer", "minimum": 0},
-        "unavailable_days": {"type": "array", "items": {"type": "string", "format": "date"}, "uniqueItems": true}
+        "unavailable_days": {"type": "array", "items": {"type": "string", "format": "date"}, "uniqueItems": true},
+        "metadata_pages_unavailable": {"type": "integer", "minimum": 0},
+        "main_page": {"type": "integer", "minimum": 0},
+        "internal_namespaces": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}}
       }
     },
     "completion": {

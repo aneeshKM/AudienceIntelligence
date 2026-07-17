@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
+import os
 from pathlib import Path
 import sys
 from typing import Callable
@@ -25,15 +26,41 @@ def main() -> int:
 
 def _wikimedia_evidence_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2_wikimedia_evidence import (
+        execute_wikimedia_evidence,
         execute_wikimedia_evidence_fixture,
     )
 
     parser = argparse.ArgumentParser(
         prog="audience-trend-miner v2-wikimedia-evidence"
     )
-    _add_v2_fixture_arguments(parser)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--as-of", type=date.fromisoformat, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--fixture", type=Path)
+    parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--progress-format", choices=("human", "json"), default="human")
     parsed = parser.parse_args(arguments)
     sink = _v2_progress_sink(parsed.progress_format)
+    if parsed.fixture is None:
+        if not parsed.database_url:
+            parser.error("--database-url or DATABASE_URL is required without --fixture")
+        from audience_trend_miner.evidence_jobs import EvidenceJobStore
+        from audience_trend_miner.wikimedia import HttpWikimediaAdapter
+
+        store = EvidenceJobStore(parsed.database_url)
+        store.migrate()
+        return _execute_v2(
+            lambda: execute_wikimedia_evidence(
+                run_id=parsed.run_id,
+                as_of_date=parsed.as_of,
+                output_root=parsed.output_dir,
+                adapter=HttpWikimediaAdapter(),
+                store=store,
+                progress_sink=sink,
+                workers=parsed.workers,
+            )
+        )
     return _execute_v2(
         lambda: execute_wikimedia_evidence_fixture(
             run_id=parsed.run_id,
