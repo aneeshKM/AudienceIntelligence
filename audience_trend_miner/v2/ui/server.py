@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 from threading import Lock, Thread
-from typing import Annotated, Literal, Sequence, cast
+from typing import Annotated, Literal, Sequence
 
 from fastapi import (
     FastAPI,
@@ -52,6 +52,12 @@ class _RunState:
         }
 
 
+@dataclass(frozen=True)
+class _Subscriber:
+    loop: asyncio.AbstractEventLoop
+    queue: asyncio.Queue[ProgressEvent]
+
+
 class _RunEventLog:
     """Durable ordered event history with independent live subscribers."""
 
@@ -60,11 +66,9 @@ class _RunEventLog:
         self._run_id = run_id
         self._lock = Lock()
         self._events = self._load()
-        self._subscribers: list[
-            tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, object]]]
-        ] = []
+        self._subscribers: list[_Subscriber] = []
 
-    def publish(self, event: ProgressEvent) -> dict[str, object]:
+    def publish(self, event: ProgressEvent) -> ProgressEvent:
         with self._lock:
             normalized = ProgressEvent(
                 run_id=event.run_id,
@@ -75,23 +79,26 @@ class _RunEventLog:
                 level=event.level,
                 message=event.message,
                 progress=event.progress,
-            ).record()
+            )
+            record = normalized.record()
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as stream:
                 stream.write(
-                    json.dumps(normalized, separators=(",", ":"), sort_keys=True)
+                    json.dumps(record, separators=(",", ":"), sort_keys=True)
                 )
                 stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
             self._events.append(normalized)
             connected_subscribers = []
-            for loop, subscriber in self._subscribers:
+            for subscriber in self._subscribers:
                 try:
-                    loop.call_soon_threadsafe(subscriber.put_nowait, normalized)
+                    subscriber.loop.call_soon_threadsafe(
+                        subscriber.queue.put_nowait, normalized
+                    )
                 except RuntimeError:
                     continue
-                connected_subscribers.append((loop, subscriber))
+                connected_subscribers.append(subscriber)
             self._subscribers = connected_subscribers
             return normalized
 
@@ -99,32 +106,28 @@ class _RunEventLog:
         self,
         after_sequence: int,
         loop: asyncio.AbstractEventLoop,
-    ) -> tuple[list[dict[str, object]], asyncio.Queue[dict[str, object]]]:
-        subscriber: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    ) -> tuple[list[ProgressEvent], _Subscriber]:
+        subscriber = _Subscriber(loop=loop, queue=asyncio.Queue())
         with self._lock:
             snapshot = list(self._events)
-            self._subscribers.append((loop, subscriber))
+            self._subscribers.append(subscriber)
         return (
-            [
-                event
-                for event in snapshot
-                if cast(int, event["sequence"]) > after_sequence
-            ],
+            [event for event in snapshot if event.sequence > after_sequence],
             subscriber,
         )
 
-    def unsubscribe(self, subscriber: asyncio.Queue[dict[str, object]]) -> None:
+    def unsubscribe(self, subscriber: _Subscriber) -> None:
         with self._lock:
             self._subscribers = [
                 registered
                 for registered in self._subscribers
-                if registered[1] is not subscriber
+                if registered is not subscriber
             ]
 
-    def _load(self) -> list[dict[str, object]]:
+    def _load(self) -> list[ProgressEvent]:
         if not self._path.exists():
             return []
-        events: list[dict[str, object]] = []
+        events: list[ProgressEvent] = []
         try:
             lines = self._path.read_text(encoding="utf-8").splitlines()
         except OSError as error:
@@ -142,7 +145,7 @@ class _RunEventLog:
                 raise V2ContractError("event history is invalid") from error
             if event.sequence != expected_sequence:
                 raise V2ContractError("event history sequence is invalid")
-            events.append(event.record())
+            events.append(event)
         return events
 
 
@@ -228,8 +231,8 @@ class _RunSupervisor:
         loop: asyncio.AbstractEventLoop,
     ) -> tuple[
         _RunEventLog,
-        list[dict[str, object]],
-        asyncio.Queue[dict[str, object]],
+        list[ProgressEvent],
+        _Subscriber,
     ]:
         with self._lock:
             history_path = self._history_path(run_id)
@@ -249,9 +252,15 @@ class _RunSupervisor:
         event_log: _RunEventLog,
     ) -> None:
         assert process.stdout is not None
-        for line in process.stdout:
+        for source_sequence, line in enumerate(process.stdout, start=1):
             try:
                 record = json.loads(line)
+                if (
+                    not isinstance(record, dict)
+                    or type(record.get("sequence")) is not int
+                    or record["sequence"] != source_sequence
+                ):
+                    raise V2ContractError("progress event sequence is out of order")
                 event = _progress_event(record, expected_run_id=state.run_id)
             except (
                 json.JSONDecodeError,
@@ -402,10 +411,10 @@ def create_app(
         await websocket.accept()
         try:
             for event in backlog:
-                await websocket.send_json(event)
+                await websocket.send_json(event.record())
             while True:
-                event = await subscriber.get()
-                await websocket.send_json(event)
+                event = await subscriber.queue.get()
+                await websocket.send_json(event.record())
         except WebSocketDisconnect:
             pass
         finally:

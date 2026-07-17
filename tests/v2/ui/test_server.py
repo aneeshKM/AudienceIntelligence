@@ -303,6 +303,46 @@ class RunServerTest(unittest.TestCase):
             self.assertEqual(events[2]["message"], "valid event")
             self.assertNotIn("private malformed details", json.dumps(events))
 
+    def test_out_of_order_cli_sequence_is_not_hidden_by_durable_ordering(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fake_cli = root / "out_of_order_cli.py"
+            fake_cli.write_text(
+                "import json, sys\n"
+                "run_id = sys.argv[sys.argv.index('--run-id') + 1]\n"
+                "def emit(message):\n"
+                "    print(json.dumps({\n"
+                "        'schema_version': '1.0', 'run_id': run_id,\n"
+                "        'sequence': 2, 'timestamp': '2026-07-17T12:00:00+00:00',\n"
+                "        'module': 'trend-portfolio', 'operation': 'qualify',\n"
+                "        'level': 'info', 'message': message,\n"
+                "    }), flush=True)\n"
+                "emit('skipped sequence one')\n"
+                "emit('second event')\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            app = create_app(
+                output_root=root / "runs",
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+
+            with TestClient(app) as client:
+                client.post(
+                    "/api/runs",
+                    json={"run_id": "ordered-run", "as_of": "2026-07-17"},
+                )
+                _wait_for_terminal(client, "ordered-run")
+                with client.websocket_connect(
+                    "/api/runs/ordered-run/events?after_sequence=0"
+                ) as websocket:
+                    events = [websocket.receive_json(), websocket.receive_json()]
+
+            self.assertEqual([event["sequence"] for event in events], [1, 2])
+            self.assertEqual(events[0]["operation"], "malformed-event")
+            self.assertEqual(events[1]["message"], "second event")
+            self.assertNotIn("skipped sequence one", json.dumps(events))
+
     def test_server_binds_to_loopback_by_default(self) -> None:
         with patch("uvicorn.run") as run:
             serve(output_root=Path("runs"))
