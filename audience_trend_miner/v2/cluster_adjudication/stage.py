@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, TypedDict, cast
 
 import jsonschema
 
@@ -24,6 +23,7 @@ from audience_trend_miner.v2.shared import (
     ProgressSink,
     V2ContractError,
     atomic_write_json,
+    canonical_json_fingerprint,
     consume_artifact,
     validate_artifact,
     validate_schema,
@@ -44,6 +44,13 @@ class StageAdapterFactory(Protocol):
     def adapter_for(
         self, cluster_index: int, preliminary_cluster: dict[str, object]
     ) -> AdjudicationAdapter: ...
+
+
+class CompletedClusterRecord(TypedDict):
+    preliminary_cluster_id: str
+    final_audience_clusters: list[dict[str, object]]
+    rejected_members: list[dict[str, object]]
+    adjudication: dict[str, object]
 
 
 def execute_cluster_adjudication_stage(
@@ -89,7 +96,9 @@ def execute_cluster_adjudication_stage(
                 else _package_version(adapter_factory.integration_name)
             ),
         },
-        "semantic_audience_formation_fingerprint": _fingerprint(formation),
+        "semantic_audience_formation_fingerprint": canonical_json_fingerprint(
+            formation
+        ),
     }
     artifact_path = output_root / run_id / f"{STAGE}.json"
     checkpoint_path = output_root / run_id / f".{STAGE}.checkpoint.json"
@@ -129,6 +138,7 @@ def execute_cluster_adjudication_stage(
             raise V2ContractError(
                 "completed Cluster Adjudication artifact conflicts with requested configuration"
             )
+        _validate_completed_payload(typed_clusters, completed_payload)
         emit("resume", "resumed compatible completed Cluster Adjudication", progress_total)
         return artifact_path
 
@@ -139,21 +149,12 @@ def execute_cluster_adjudication_stage(
         checkpoint_path,
         run_id=run_id,
         configuration=configuration,
-        cluster_count=total_clusters,
+        preliminary_clusters=typed_clusters,
     )
     for completed_record in completed_records:
-        resumed_groups = cast(
-            list[dict[str, object]], completed_record["final_audience_clusters"]
-        )
-        resumed_rejections = cast(
-            list[dict[str, object]], completed_record["rejected_members"]
-        )
-        resumed_adjudication = cast(
-            dict[str, object], completed_record["adjudication"]
-        )
-        final_clusters.extend(resumed_groups)
-        rejected_members.extend(resumed_rejections)
-        adjudications.append(resumed_adjudication)
+        final_clusters.extend(completed_record["final_audience_clusters"])
+        rejected_members.extend(completed_record["rejected_members"])
+        adjudications.append(completed_record["adjudication"])
         emit(
             "resume-cluster",
             f"resumed {completed_record['preliminary_cluster_id']}",
@@ -203,12 +204,12 @@ def execute_cluster_adjudication_stage(
                 "errors": list(result.validation_errors),
             },
         }
-        new_checkpoint_record: dict[str, object] = {
-            "preliminary_cluster_id": preliminary_cluster_id,
-            "final_audience_clusters": completed_groups,
-            "rejected_members": completed_rejections,
-            "adjudication": completed_adjudication,
-        }
+        new_checkpoint_record = CompletedClusterRecord(
+            preliminary_cluster_id=preliminary_cluster_id,
+            final_audience_clusters=completed_groups,
+            rejected_members=completed_rejections,
+            adjudication=completed_adjudication,
+        )
         completed_records.append(new_checkpoint_record)
         final_clusters.extend(completed_groups)
         rejected_members.extend(completed_rejections)
@@ -239,13 +240,13 @@ def execute_cluster_adjudication_stage(
         "adjudications": adjudications,
         "completion": {"status": "complete"},
     }
-    _validate_terminal_membership(typed_clusters, final_clusters, rejected_members)
     try:
         validate_schema(SCHEMA_PATH, payload)
     except jsonschema.ValidationError as error:
         raise V2ContractError(
             f"Cluster Adjudication is schema-invalid: {error.message}"
         ) from error
+    _validate_completed_payload(typed_clusters, payload)
     artifact = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "run_id": run_id,
@@ -277,30 +278,93 @@ def _validate_exclusive_input_pages(clusters: list[dict[str, object]]) -> None:
         raise V2ContractError("selected Preliminary Clusters contain duplicate page IDs")
 
 
-def _validate_terminal_membership(
+def _validate_completed_payload(
     preliminary_clusters: list[dict[str, object]],
+    payload: dict[str, object],
+) -> None:
+    final_clusters = cast(list[dict[str, object]], payload["final_audience_clusters"])
+    rejected_members = cast(list[dict[str, object]], payload["rejected_members"])
+    adjudications = cast(list[dict[str, object]], payload["adjudications"])
+    expected_sources = [
+        f"preliminary-cluster-{index:04d}"
+        for index in range(1, len(preliminary_clusters) + 1)
+    ]
+    if [item["preliminary_cluster_id"] for item in adjudications] != expected_sources:
+        raise V2ContractError(
+            "Cluster Adjudication provenance does not match Preliminary Clusters"
+        )
+    if [cluster["cluster_id"] for cluster in final_clusters] != [
+        f"final-audience-cluster-{index:04d}"
+        for index in range(1, len(final_clusters) + 1)
+    ]:
+        raise V2ContractError("Cluster Adjudication Final Audience Cluster IDs are invalid")
+    output_sources = {
+        cast(str, item["source_preliminary_cluster_id"])
+        for item in [*final_clusters, *rejected_members]
+    }
+    if not output_sources.issubset(set(expected_sources)):
+        raise V2ContractError(
+            "Cluster Adjudication provenance does not match Preliminary Clusters"
+        )
+    for source_id, preliminary_cluster in zip(
+        expected_sources, preliminary_clusters, strict=True
+    ):
+        _validate_component_terminal_membership(
+            preliminary_cluster,
+            [
+                cluster
+                for cluster in final_clusters
+                if cluster["source_preliminary_cluster_id"] == source_id
+            ],
+            [
+                member
+                for member in rejected_members
+                if member["source_preliminary_cluster_id"] == source_id
+            ],
+            context="Cluster Adjudication",
+        )
+    accepted_page_count = sum(
+        len(cast(list[dict[str, object]], cluster["members"]))
+        for cluster in final_clusters
+    )
+    expected_counts = {
+        "preliminary_clusters": len(preliminary_clusters),
+        "final_audience_clusters": len(final_clusters),
+        "accepted_pages": accepted_page_count,
+        "rejected_pages": len(rejected_members),
+    }
+    if payload["counts"] != expected_counts:
+        raise V2ContractError("Cluster Adjudication counts do not match membership")
+
+
+def _validate_component_terminal_membership(
+    preliminary_cluster: dict[str, object],
     final_clusters: list[dict[str, object]],
     rejected_members: list[dict[str, object]],
+    *,
+    context: str,
 ) -> None:
-    supplied = [
-        member["page_id"]
-        for cluster in preliminary_clusters
-        for member in cast(list[dict[str, object]], cluster["members"])
-    ]
-    terminal = [
-        member["page_id"]
-        for cluster in final_clusters
-        for member in cast(list[dict[str, object]], cluster["members"])
-    ] + [member["page_id"] for member in rejected_members]
-    if len(terminal) != len(set(terminal)) or set(terminal) != set(supplied):
-        raise V2ContractError("Cluster Adjudication terminal membership is not exclusive")
-
-
-def _fingerprint(artifact: object) -> str:
-    encoded = json.dumps(
-        artifact, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-    ).encode("utf-8")
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    supplied_members = cast(
+        list[dict[str, object]], preliminary_cluster["members"]
+    )
+    supplied_ids = [member["page_id"] for member in supplied_members]
+    terminal_ids: list[object] = []
+    for final_cluster in final_clusters:
+        members = final_cluster.get("members")
+        if not isinstance(members, list) or any(
+            not isinstance(member, dict) or "page_id" not in member
+            for member in members
+        ):
+            raise V2ContractError(f"{context} terminal membership is invalid")
+        terminal_ids.extend(member["page_id"] for member in members)
+    if any("page_id" not in member for member in rejected_members):
+        raise V2ContractError(f"{context} terminal membership is invalid")
+    terminal_ids.extend(member["page_id"] for member in rejected_members)
+    if (
+        len(terminal_ids) != len(set(terminal_ids))
+        or set(terminal_ids) != set(supplied_ids)
+    ):
+        raise V2ContractError(f"{context} terminal membership is not exclusive")
 
 
 def _package_version(package: str) -> str:
@@ -315,8 +379,8 @@ def _load_checkpoint(
     *,
     run_id: str,
     configuration: dict[str, object],
-    cluster_count: int,
-) -> list[dict[str, object]]:
+    preliminary_clusters: list[dict[str, object]],
+) -> list[CompletedClusterRecord]:
     if not path.exists():
         return []
     try:
@@ -330,7 +394,7 @@ def _load_checkpoint(
         or checkpoint["run_id"] != run_id
         or checkpoint["configuration"] != configuration
         or not isinstance(checkpoint["completed"], list)
-        or len(checkpoint["completed"]) > cluster_count
+        or len(checkpoint["completed"]) > len(preliminary_clusters)
     ):
         raise V2ContractError(
             "Cluster Adjudication checkpoint conflicts with requested configuration"
@@ -351,4 +415,27 @@ def _load_checkpoint(
             or not isinstance(record["adjudication"], dict)
         ):
             raise V2ContractError("Cluster Adjudication checkpoint is invalid")
-    return completed
+        typed_record = cast(dict[str, object], record)
+        final_clusters = cast(
+            list[dict[str, object]], typed_record["final_audience_clusters"]
+        )
+        rejected_members = cast(
+            list[dict[str, object]], typed_record["rejected_members"]
+        )
+        if any(
+            not isinstance(item, dict)
+            or item.get("source_preliminary_cluster_id")
+            != f"preliminary-cluster-{index:04d}"
+            for item in [*final_clusters, *rejected_members]
+        ):
+            raise V2ContractError("Cluster Adjudication checkpoint provenance is invalid")
+        adjudication = cast(dict[str, object], typed_record["adjudication"])
+        if adjudication.get("preliminary_cluster_id") != record["preliminary_cluster_id"]:
+            raise V2ContractError("Cluster Adjudication checkpoint provenance is invalid")
+        _validate_component_terminal_membership(
+            preliminary_clusters[index - 1],
+            final_clusters,
+            rejected_members,
+            context="Cluster Adjudication checkpoint",
+        )
+    return cast(list[CompletedClusterRecord], completed)

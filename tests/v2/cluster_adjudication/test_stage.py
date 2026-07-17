@@ -95,6 +95,80 @@ def run_stage(
 
 
 class ClusterAdjudicationStageTest(unittest.TestCase):
+    def test_resume_rejects_schema_valid_artifact_with_duplicate_terminal_membership(self) -> None:
+        clusters = [
+            [page(101, "Air purifier"), page(102, "HEPA")],
+            [
+                page(201, "Air purifier"),
+                page(202, "HEPA"),
+                page(203, "Air conditioning"),
+                page(204, "Heat pump"),
+                page(205, "Minister for Energy"),
+            ],
+            [page(301, "Crime event"), page(302, "Crime suspect")],
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            run_directory = output_dir / "adjudication-run"
+            publish_formation(output_dir, "adjudication-run", clusters)
+            first = run_stage(output_dir)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            artifact_path = run_directory / "cluster-adjudication.json"
+            artifact = json.loads(artifact_path.read_text())
+            artifact["payload"]["final_audience_clusters"][1]["members"].append(
+                artifact["payload"]["final_audience_clusters"][0]["members"][0]
+            )
+            artifact["payload"]["counts"]["accepted_pages"] += 1
+            artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+            resumed = run_stage(
+                output_dir,
+                "adjudication-run",
+                fixture="resume_guard_decisions.json",
+            )
+
+            self.assertNotEqual(resumed.returncode, 0)
+            self.assertIn("terminal membership", resumed.stderr)
+
+    def test_resume_rejects_checkpoint_that_moves_pages_between_components(self) -> None:
+        clusters = [
+            [page(101, "Air purifier"), page(102, "HEPA")],
+            [
+                page(201, "Air purifier"),
+                page(202, "HEPA"),
+                page(203, "Air conditioning"),
+                page(204, "Heat pump"),
+                page(205, "Minister for Energy"),
+            ],
+            [page(301, "Crime event"), page(302, "Crime suspect")],
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            run_directory = output_dir / "adjudication-run"
+            publish_formation(output_dir, "adjudication-run", clusters)
+            interrupted = run_stage(
+                output_dir,
+                "adjudication-run",
+                "--interrupt-before-completion",
+            )
+            self.assertNotEqual(interrupted.returncode, 0)
+            checkpoint_path = run_directory / ".cluster-adjudication.checkpoint.json"
+            checkpoint = json.loads(checkpoint_path.read_text())
+            first_member = checkpoint["completed"][0]["final_audience_clusters"][0]["members"][0]
+            second_member = checkpoint["completed"][1]["final_audience_clusters"][0]["members"][0]
+            checkpoint["completed"][0]["final_audience_clusters"][0]["members"][0] = second_member
+            checkpoint["completed"][1]["final_audience_clusters"][0]["members"][0] = first_member
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+
+            resumed = run_stage(
+                output_dir,
+                "adjudication-run",
+                fixture="resume_guard_decisions.json",
+            )
+
+            self.assertNotEqual(resumed.returncode, 0)
+            self.assertIn("checkpoint terminal membership", resumed.stderr)
+
     def test_atomic_failure_resumes_completed_clusters_without_repeating_them(self) -> None:
         clusters = [
             [page(101, "Air purifier"), page(102, "HEPA")],

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
-import hashlib
-import json
 from pathlib import Path
 from typing import Literal
 
@@ -28,6 +26,7 @@ from audience_trend_miner.v2.shared import (
     ProgressSink,
     V2ContractError,
     atomic_write_json,
+    canonical_json_fingerprint,
     consume_artifact,
     validate_artifact,
     validate_schema,
@@ -307,10 +306,4 @@ def _semantic_evidence_fingerprint(artifact: dict[str, object]) -> str:
         ),
         key=lambda page: (page["page_id"], page["canonical_title"]),
     )
-    encoded = json.dumps(
-        semantic_evidence,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    return canonical_json_fingerprint(semantic_evidence)

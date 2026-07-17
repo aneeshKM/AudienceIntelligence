@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -260,6 +261,17 @@ def atomic_write_json(
             os.replace(temporary_path, path)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def canonical_json_fingerprint(content: object) -> str:
+    """Return a stable SHA-256 identity for JSON-compatible evidence."""
+    encoded = json.dumps(
+        content,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _validate(schema_name: str, instance: object) -> None:
