@@ -151,6 +151,9 @@ class PublicationQualityTest(unittest.TestCase):
                 {"source_component_id": 1, "page_ids": [1, 2], "size_basis_points": 5000, "estimated_size_index": 50.0},
                 {"source_component_id": 2, "page_ids": [3], "size_basis_points": 5000, "estimated_size_index": 50.0},
             ],
+            "portfolio_assessments": [
+                {"source_component_id": 1}, {"source_component_id": 2}
+            ],
         }
         portfolio = {"audiences": [
             {"source_component_id": 1, "page_ids": [1, 2], "estimated_size_index": 50.0},
@@ -161,6 +164,7 @@ class PublicationQualityTest(unittest.TestCase):
 
         self.assertEqual(result.traced_page_ids, (1, 2, 3))
         self.assertEqual(result.total_size_basis_points, 10_000)
+        self.assertEqual(result.scored_component_ids, (1, 2))
 
         broken = copy.deepcopy(audit)
         broken["canonical_articles"][0]["aliases"] = []

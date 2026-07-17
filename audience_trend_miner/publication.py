@@ -156,6 +156,8 @@ def _assemble_artifacts(publication: PublicationInput) -> dict[str, str]:
     audit["quality_checks"] = {
         "traced_page_ids": list(quality.traced_page_ids),
         "total_size_basis_points": quality.total_size_basis_points,
+        "scored_component_ids": list(quality.scored_component_ids),
+        "excluded_component_ids": list(quality.excluded_component_ids),
     }
     _validate("manifest.schema.json", manifest)
     _validate("portfolio.schema.json", portfolio)

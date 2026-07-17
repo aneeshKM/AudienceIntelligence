@@ -168,6 +168,8 @@ class PortfolioTransformationTest(unittest.TestCase):
         self.assertEqual(audience["page_ids"], [1, 2])
         self.assertEqual(audit["quality_checks"]["traced_page_ids"], [1, 2])
         self.assertEqual(audit["quality_checks"]["total_size_basis_points"], 10_000)
+        self.assertEqual(audit["quality_checks"]["scored_component_ids"], [1])
+        self.assertEqual(audit["quality_checks"]["excluded_component_ids"], [])
         self.assertEqual(audience["estimated_size_index"], 100.0)
         self.assertIn(
             '"estimated_size_index": 100.00',

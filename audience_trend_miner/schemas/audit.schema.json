@@ -34,10 +34,12 @@
     "quality_checks": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["traced_page_ids", "total_size_basis_points"],
+      "required": ["traced_page_ids", "total_size_basis_points", "scored_component_ids", "excluded_component_ids"],
       "properties": {
         "traced_page_ids": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
-        "total_size_basis_points": {"enum": [0, 10000]}
+        "total_size_basis_points": {"enum": [0, 10000]},
+        "scored_component_ids": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "excluded_component_ids": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}}
       }
     },
     "raw_candidate_titles": {

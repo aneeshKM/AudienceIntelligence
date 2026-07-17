@@ -10,6 +10,7 @@ from pathlib import Path
 import jsonschema
 
 from audience_trend_miner.publication import PublicationInput, publish_run
+from audience_trend_miner.portfolio import build_portfolio
 from audience_trend_miner.classification import (
     ArticleClassificationResult,
     classify_articles,
@@ -420,16 +421,39 @@ class RunPublicationTest(unittest.TestCase):
             ),
             sleep=lambda _: None,
         )
+        portfolio = build_portfolio(
+            refined,
+            articles,
+            ScriptedGenerator({
+                "name": "Endurance Running Enthusiasts",
+                "description": "Traffic increased, suggesting growing interest.",
+                "purchase_intent": 2,
+                "transaction_value": 2,
+                "category_breadth": 2,
+                "brand_safety": 3,
+                "brand_categories": ["Sportswear"],
+                "rationale": "Safe consumer audience with purchase relevance.",
+                "name_is_targetable_group": True,
+                "causal_claims_are_hypotheses": True,
+                "rationale_avoids_wealth_inference": True,
+            }),
+            sleep=lambda _: None,
+        )
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             published = publish_run(
                 publication_input(
                     Path(temporary_directory) / "runs",
-                    attention=WikimediaAttentionResult((), articles, ()),
+                    attention=WikimediaAttentionResult(
+                        tuple(article.aliases[0].raw_title for article in articles),
+                        articles,
+                        (),
+                    ),
                     qualification=qualification,
                     classification=classification,
                     clustering=clustering,
                     refinement=refined,
+                    portfolio=portfolio,
                 )
             )
             audit = json.loads((published / "audit.json").read_text())
@@ -469,7 +493,11 @@ class RunPublicationTest(unittest.TestCase):
             published = publish_run(
                 publication_input(
                     Path(temporary_directory) / "runs",
-                    attention=WikimediaAttentionResult((), articles, ()),
+                    attention=WikimediaAttentionResult(
+                        tuple(article.aliases[0].raw_title for article in articles),
+                        articles,
+                        (),
+                    ),
                     qualification=qualification,
                     classification=classification,
                     clustering=clustering,

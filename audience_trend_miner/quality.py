@@ -52,6 +52,8 @@ class FrozenEvaluationResult:
 class PublicationQualityResult:
     traced_page_ids: tuple[int, ...]
     total_size_basis_points: int
+    scored_component_ids: tuple[int, ...]
+    excluded_component_ids: tuple[int, ...]
 
 
 def evaluate_frozen_fixture(
@@ -121,7 +123,9 @@ def verify_publication_quality(
         item["source_component_id"]: item for item in audit["portfolio_calculations"]
     }
     audiences = portfolio["audiences"]
-    if audiences:
+    refinement_data = audit["cluster_refinement"]
+    if (refinement_data["accepted"] or refinement_data["decisions"]
+            or refinement_data["rejected_standalone_page_ids"]):
         _verify_all_consumed_dispositions(audit, articles, classified, components)
     all_page_ids: list[int] = []
     traffic: list[int] = []
@@ -153,7 +157,30 @@ def verify_publication_quality(
             raise ValueError(f"Size Index is incorrect for component {audience['source_component_id']}")
         if audience["estimated_size_index"] != points / 100:
             raise ValueError(f"published Size Index is incorrect for component {audience['source_component_id']}")
-    return PublicationQualityResult(tuple(sorted(all_page_ids)), sum(expected_points))
+    refined_component_ids = {
+        item["source_component_id"] for item in refinement_data["accepted"]
+    }
+    scored_component_ids = {
+        item["source_component_id"] for item in audit["portfolio_assessments"]
+    }
+    if not scored_component_ids.issubset(refined_component_ids):
+        raise ValueError("portfolio scoring references an unaccepted refinement")
+    if len(scored_component_ids) != min(10, len(refined_component_ids)):
+        raise ValueError("refinement-to-scoring disposition lineage is incomplete")
+    calculated_component_ids = set(calculations)
+    failed_component_ids = {
+        int(str(failure["subject"]).split(":", 1)[1])
+        for failure in audit["failures"]
+        if failure["operation"] == "portfolio_assessment"
+    }
+    if scored_component_ids != calculated_component_ids | failed_component_ids:
+        raise ValueError("scored audience lacks a calculation or failure disposition")
+    return PublicationQualityResult(
+        tuple(sorted(all_page_ids)),
+        sum(expected_points),
+        tuple(sorted(scored_component_ids)),
+        tuple(sorted(refined_component_ids - scored_component_ids)),
+    )
 
 
 def _verify_all_consumed_dispositions(
