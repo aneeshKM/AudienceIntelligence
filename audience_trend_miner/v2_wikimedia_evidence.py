@@ -1,9 +1,23 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import json
 from pathlib import Path
-from typing import Mapping
+from threading import Lock
+from typing import Mapping, Protocol
+
+from audience_trend_miner.evidence_jobs import (
+    EvidenceJob,
+    EvidenceJobExecution,
+    EvidenceJobStore,
+    FailedEvidence,
+    TerminalEvidence,
+    COUNTRY_DAY_OPERATION,
+)
+from audience_trend_miner.wikimedia import (
+    CountryTopPagesResponse,
+    WikimediaPermanentError,
+)
 
 from audience_trend_miner.v2_contracts import (
     ARTIFACT_SCHEMA_VERSION,
@@ -21,6 +35,99 @@ from audience_trend_miner.v2_contracts import (
 
 STAGE = "wikimedia-evidence"
 MINIMUM_SUCCESSFUL_DAYS = 4
+
+
+class CountryTopPagesAdapter(Protocol):
+    def daily_country_top_pages(self, day: date) -> CountryTopPagesResponse: ...
+
+
+def acquire_country_days(
+    run_id: str,
+    days: tuple[date, ...],
+    adapter: CountryTopPagesAdapter,
+    store: EvidenceJobStore,
+    progress_sink: ProgressSink,
+    *,
+    workers: int = 4,
+) -> tuple[TerminalEvidence, ...]:
+    """Acquire independently resumable US country-day Analytics evidence."""
+    _safe_identifier(run_id, "run_id")
+    if len(days) != 14 or any(
+        later != earlier + timedelta(days=1)
+        for earlier, later in zip(days, days[1:])
+    ):
+        raise V2ContractError("country acquisition requires fourteen consecutive days")
+    subjects = tuple(day.isoformat() for day in days)
+    store.ensure_run(
+        run_id,
+        {
+            "country": "US",
+            "access": "all-access",
+            "days": ",".join(subjects),
+        },
+    )
+    store.schedule_country_days(run_id, subjects)
+    existing = store.terminal_results(run_id, (COUNTRY_DAY_OPERATION,))
+    sequence = 0
+    sequence_lock = Lock()
+
+    def emit(subject: str, message: str) -> None:
+        nonlocal sequence
+        with sequence_lock:
+            sequence += 1
+            current = sequence
+            progress_sink(
+                ProgressEvent(
+                    run_id=run_id,
+                    sequence=current,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    module=STAGE,
+                    operation="acquire",
+                    level="info",
+                    message=f"{message} {subject}",
+                    progress=BoundedProgress(current, len(subjects)),
+                )
+            )
+
+    for result in existing:
+        emit(result.subject, "resumed")
+
+    def fetch(job: EvidenceJob) -> object:
+        response = adapter.daily_country_top_pages(date.fromisoformat(job.subject))
+        return {
+            "records": [
+                {
+                    "project": record.project,
+                    "article": record.article,
+                    "views_ceil": record.views_ceil,
+                }
+                for record in response.records
+                if record.project == "en.wikipedia"
+            ]
+        }
+
+    EvidenceJobExecution(store, honor_retry_after=True).drain(
+        run_id,
+        (COUNTRY_DAY_OPERATION,),
+        fetch,
+        workers=workers,
+        is_terminal_error=lambda error: isinstance(error, WikimediaPermanentError),
+        on_terminal=lambda job: emit(job.subject, "processed"),
+    )
+    results = store.results_at_barrier(run_id, (COUNTRY_DAY_OPERATION,))
+    for window, window_results in (
+        ("previous", results[:7]),
+        ("current", results[7:]),
+    ):
+        successful_days = sum(
+            not isinstance(result, FailedEvidence) for result in window_results
+        )
+        if successful_days < MINIMUM_SUCCESSFUL_DAYS:
+            raise V2ContractError(
+                f"{window} Effective Window has {successful_days} successful days; "
+                f"at least {MINIMUM_SUCCESSFUL_DAYS} are required"
+            )
+    return results
 
 
 def execute_wikimedia_evidence_fixture(

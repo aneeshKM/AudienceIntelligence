@@ -10,6 +10,7 @@ from audience_trend_miner.evidence_jobs import (
 )
 from audience_trend_miner.resumable_wikimedia import acquire_resumable_wikimedia_attention
 from audience_trend_miner.wikimedia import AnalysisWindows, FixtureWikimediaAdapter
+from audience_trend_miner.v2_wikimedia_evidence import acquire_country_days
 from tests.postgres import test_database_url
 
 
@@ -202,6 +203,93 @@ class EvidenceJobStoreTest(unittest.TestCase):
         )[0]
         self.assertIsInstance(pageviews, FailedEvidence)
         self.assertEqual(pageviews.attempts, 3)
+
+    def test_country_day_jobs_retry_independently_report_progress_and_resume(self) -> None:
+        adapter = CountryAdapter()
+        progress = []
+
+        first = acquire_country_days(
+            "country-run",
+            tuple(date(2026, 7, 1) + timedelta(days=offset) for offset in range(14)),
+            adapter,
+            self.store,
+            progress.append,
+            workers=2,
+        )
+        calls_after_first = adapter.calls
+        second_progress = []
+        second = acquire_country_days(
+            "country-run",
+            tuple(date(2026, 7, 1) + timedelta(days=offset) for offset in range(14)),
+            adapter,
+            self.store,
+            second_progress.append,
+            workers=2,
+        )
+
+        self.assertEqual(adapter.calls, calls_after_first)
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 14)
+        exhausted = next(item for item in first if item.subject == "2026-07-03")
+        self.assertIsInstance(exhausted, FailedEvidence)
+        self.assertEqual(exhausted.attempts, 3)
+        successful = next(item for item in first if item.subject == "2026-07-01")
+        self.assertEqual(
+            successful.evidence["records"],
+            [{"project": "en.wikipedia", "article": "Page_1", "views_ceil": 1}],
+        )
+        self.assertEqual(progress[-1].progress.current, 14)
+        self.assertEqual(progress[-1].progress.total, 14)
+        self.assertEqual([event.sequence for event in progress], list(range(1, 15)))
+        self.assertEqual(second_progress[-1].progress.current, 14)
+
+    def test_country_day_jobs_reject_a_window_below_coverage_threshold(self) -> None:
+        adapter = CountryAdapter(
+            unavailable={"2026-07-01", "2026-07-02", "2026-07-03", "2026-07-04"}
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "previous Effective Window has 3 successful days"
+        ):
+            acquire_country_days(
+                "low-country-coverage",
+                tuple(
+                    date(2026, 7, 1) + timedelta(days=offset)
+                    for offset in range(14)
+                ),
+                adapter,
+                self.store,
+                lambda event: None,
+                workers=2,
+            )
+
+
+class CountryAdapter:
+    def __init__(self, unavailable=None) -> None:
+        self.calls = 0
+        self.attempts = {}
+        self.unavailable = unavailable or {"2026-07-03"}
+
+    def daily_country_top_pages(self, day):
+        from audience_trend_miner.wikimedia import (
+            CountryPageviewRecord,
+            CountryTopPagesResponse,
+            WikimediaTransientError,
+        )
+
+        self.calls += 1
+        day_text = day.isoformat()
+        attempt = self.attempts.get(day_text, 0) + 1
+        self.attempts[day_text] = attempt
+        if day_text in self.unavailable:
+            raise WikimediaTransientError("unavailable", retry_immediately=True)
+        return CountryTopPagesResponse(
+            (
+                CountryPageviewRecord("en.wikipedia", f"Page_{day.day}", day.day),
+                CountryPageviewRecord("de.wikipedia", "Andere", 100),
+            ),
+            {"day": day_text},
+        )
 
 
 class CountingAdapter:

@@ -42,6 +42,7 @@ class FailedEvidence:
 
 
 TerminalEvidence = CompletedEvidence | FailedEvidence
+COUNTRY_DAY_OPERATION = "country-day"
 
 
 class EvidenceJobStore:
@@ -103,6 +104,9 @@ class EvidenceJobStore:
 
     def schedule_discovery(self, run_id: str, subjects: tuple[str, ...]) -> None:
         self._schedule(run_id, "discovery", subjects)
+
+    def schedule_country_days(self, run_id: str, subjects: tuple[str, ...]) -> None:
+        self._schedule(run_id, COUNTRY_DAY_OPERATION, subjects)
 
     def schedule_alias_evidence(
         self, run_id: str, subjects: tuple[str, ...]
@@ -225,6 +229,11 @@ class EvidenceJobStore:
             raise RuntimeError("evidence results requested before the run barrier")
         return self._terminal_evidence(run_id, operations)
 
+    def terminal_results(
+        self, run_id: str, operations: tuple[str, ...]
+    ) -> tuple[TerminalEvidence, ...]:
+        return self._terminal_evidence(run_id, operations)
+
     def _terminal_evidence(
         self,
         run_id: str,
@@ -266,12 +275,14 @@ class EvidenceJobExecution:
         lease_seconds: int = 60,
         sleep: Callable[[float], None] = time.sleep,
         jitter: Callable[[float, float], float] = random.uniform,
+        honor_retry_after: bool = False,
     ) -> None:
         self.store = store
         self.max_attempts = max_attempts
         self.lease_seconds = lease_seconds
         self.sleep = sleep
         self.jitter = jitter
+        self.honor_retry_after = honor_retry_after
 
     def drain(
         self,
@@ -281,6 +292,7 @@ class EvidenceJobExecution:
         *,
         workers: int,
         is_terminal_error: Callable[[Exception], bool],
+        on_terminal: Callable[[EvidenceJob], None] | None = None,
     ) -> None:
         def work(worker_number: int) -> None:
             while not self.store.barrier_reached(run_id, operations):
@@ -301,9 +313,18 @@ class EvidenceJobExecution:
                         is_terminal_error(error) or job.attempts >= self.max_attempts
                     )
                     self.store.fail(job, str(error), terminal=terminal)
+                    if terminal and on_terminal:
+                        on_terminal(job)
                     if not terminal and not getattr(error, "retry_immediately", False):
-                        delay = 2 ** (job.attempts - 1)
-                        self.sleep(delay + self.jitter(0, delay))
+                        retry_after = getattr(error, "retry_after_seconds", None)
+                        if self.honor_retry_after and retry_after is not None:
+                            self.sleep(retry_after)
+                        else:
+                            delay = 2 ** (job.attempts - 1)
+                            self.sleep(delay + self.jitter(0, delay))
+                else:
+                    if on_terminal:
+                        on_terminal(job)
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             tuple(executor.map(work, range(workers)))

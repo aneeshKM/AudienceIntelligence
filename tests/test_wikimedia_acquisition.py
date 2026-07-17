@@ -5,7 +5,11 @@ from datetime import date
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
-from audience_trend_miner.wikimedia import HttpWikimediaAdapter, UrllibJsonTransport
+from audience_trend_miner.wikimedia import (
+    HttpWikimediaAdapter,
+    UrllibJsonTransport,
+    WikimediaTransientError,
+)
 
 
 class RecordingJsonTransport:
@@ -14,6 +18,25 @@ class RecordingJsonTransport:
 
     def get_json(self, url: str) -> object:
         self.urls.append(url)
+        if "/top-per-country/" in url:
+            return {
+                "items": [
+                    {
+                        "articles": [
+                            {
+                                "project": "en.wikipedia",
+                                "article": "Raw_Title",
+                                "views_ceil": 12,
+                            },
+                            {
+                                "project": "de.wikipedia",
+                                "article": "Anderer_Titel",
+                                "views_ceil": 7,
+                            },
+                        ]
+                    }
+                ]
+            }
         if "/top/" in url:
             return {"items": [{"articles": [{"article": "Raw_Title"}]}]}
         if "/per-article/" in url:
@@ -33,6 +56,43 @@ class RecordingJsonTransport:
 
 
 class HttpWikimediaAdapterTest(unittest.TestCase):
+    def test_country_top_pages_uses_us_all_access_contract(self) -> None:
+        transport = RecordingJsonTransport()
+        adapter = HttpWikimediaAdapter(transport=transport)
+
+        response = adapter.daily_country_top_pages(date(2026, 7, 8))
+
+        self.assertEqual(
+            transport.urls,
+            [
+                "https://wikimedia.org/api/rest_v1/metrics/pageviews/"
+                "top-per-country/US/all-access/2026/07/08"
+            ],
+        )
+        self.assertEqual(
+            [
+                (record.project, record.article, record.views_ceil)
+                for record in response.records
+            ],
+            [("en.wikipedia", "Raw_Title", 12), ("de.wikipedia", "Anderer_Titel", 7)],
+        )
+
+    def test_transport_exposes_retry_after_for_throttling(self) -> None:
+        error = __import__("urllib.error").error.HTTPError(
+            "https://wikimedia.example/data",
+            429,
+            "throttled",
+            {"Retry-After": "9"},
+            None,
+        )
+        with patch("audience_trend_miner.wikimedia.urlopen", side_effect=error):
+            with self.assertRaises(WikimediaTransientError) as raised:
+                UrllibJsonTransport(request_interval_seconds=0).get_json(
+                    "https://wikimedia.example/data"
+                )
+
+        self.assertEqual(raised.exception.retry_after_seconds, 9.0)
+
     def test_transport_paces_consecutive_requests(self) -> None:
         ssl_context = MagicMock()
 

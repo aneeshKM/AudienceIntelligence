@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
 from pathlib import Path
 import ssl
@@ -76,8 +78,15 @@ class AcquisitionFailure:
 
 
 class WikimediaTransientError(RuntimeError):
-    def __init__(self, message: str, *, retry_immediately: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_immediately: bool = False,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         self.retry_immediately = retry_immediately
+        self.retry_after_seconds = retry_after_seconds
         self.attempts = 1
         super().__init__(message)
 
@@ -111,6 +120,19 @@ class WikimediaAttentionResult:
 @dataclass(frozen=True)
 class DiscoveryResponse:
     titles: tuple[str, ...]
+    raw: object
+
+
+@dataclass(frozen=True)
+class CountryPageviewRecord:
+    project: str
+    article: str
+    views_ceil: int
+
+
+@dataclass(frozen=True)
+class CountryTopPagesResponse:
+    records: tuple[CountryPageviewRecord, ...]
     raw: object
 
 
@@ -187,7 +209,21 @@ class UrllibJsonTransport:
                 return json.load(response)
         except HTTPError as error:
             if error.code == 429 or error.code >= 500:
-                raise WikimediaTransientError(str(error)) from error
+                retry_after = error.headers.get("Retry-After") if error.headers else None
+                try:
+                    retry_after_seconds = float(retry_after) if retry_after else None
+                except ValueError:
+                    try:
+                        retry_at = parsedate_to_datetime(retry_after)
+                        retry_after_seconds = max(
+                            0.0,
+                            (retry_at - datetime.now(timezone.utc)).total_seconds(),
+                        )
+                    except (TypeError, ValueError):
+                        retry_after_seconds = None
+                raise WikimediaTransientError(
+                    str(error), retry_after_seconds=retry_after_seconds
+                ) from error
             raise WikimediaPermanentError(str(error)) from error
         except Exception as error:
             raise WikimediaTransientError(str(error)) from error
@@ -220,6 +256,28 @@ class HttpWikimediaAdapter:
         except (KeyError, TypeError) as error:
             raise WikimediaTransientError("invalid daily top-pages response") from error
         return DiscoveryResponse(titles=titles, raw=raw)
+
+    def daily_country_top_pages(self, day: date) -> CountryTopPagesResponse:
+        url = (
+            f"{self._rest_base_url}/metrics/pageviews/top-per-country/"
+            f"US/all-access/{day:%Y/%m/%d}"
+        )
+        raw = self._transport.get_json(url)
+        try:
+            records = tuple(
+                CountryPageviewRecord(
+                    project=str(article["project"]),
+                    article=str(article["article"]),
+                    views_ceil=int(article["views_ceil"]),
+                )
+                for item in raw["items"]
+                for article in item["articles"]
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise WikimediaTransientError(
+                "invalid country top-pages response"
+            ) from error
+        return CountryTopPagesResponse(records=records, raw=raw)
 
     def article_pageviews(
         self, raw_title: str, start: date, end: date
