@@ -66,6 +66,31 @@ def _run_stage(
     )
 
 
+def _bounded_narrative(
+    name: str,
+    direction: str,
+    *brand_categories: str,
+) -> dict[str, object]:
+    category_text = ", ".join(brand_categories)
+    direction_word = "rose" if direction == "robust_growth" else "declined"
+    rating = "medium"
+    return {
+        "name": name,
+        "summary": (
+            f"Attention to {name} topics {direction_word} in the supplied comparison."
+        ),
+        "commercial_interpretation": (
+            f"{category_text} brands may find the supplied topic group commercially relevant."
+        ),
+        "brand_categories": list(brand_categories),
+        "buying_power_rating": rating,
+        "buying_power_rationale": (
+            f"The {rating} rating is a qualitative assessment based on the supplied "
+            f"topics' relevance to {category_text}."
+        ),
+    }
+
+
 def _write_valid_fixture(path: Path) -> None:
     path.write_text(
         json.dumps(
@@ -76,19 +101,22 @@ def _write_valid_fixture(path: Path) -> None:
                     {
                         "cluster_id": cluster_id,
                         "responses": [
-                            {
-                                "name": name,
-                                "summary": f"Attention to {name.lower()} changed in the supplied comparison.",
-                                "commercial_interpretation": "The topic group is relevant to home-system brands.",
-                                "brand_categories": ["Home systems"],
-                                "buying_power_rating": "medium",
-                                "buying_power_rationale": "The pages concern durable household equipment.",
-                            }
+                            _bounded_narrative(name, direction, category)
                         ],
                     }
-                    for cluster_id, name in (
-                        ("final-audience-cluster-0002", "Cooling systems"),
-                        ("final-audience-cluster-0001", "Air quality equipment"),
+                    for cluster_id, name, direction, category in (
+                        (
+                            "final-audience-cluster-0002",
+                            "Shrinking",
+                            "robust_shrinking",
+                            "HVAC",
+                        ),
+                        (
+                            "final-audience-cluster-0001",
+                            "Growing",
+                            "robust_growth",
+                            "Air quality",
+                        ),
                     )
                 ],
             }
@@ -212,14 +240,9 @@ class TrendPortfolioStageTest(unittest.TestCase):
                 "buying_power_rating": "medium",
                 "buying_power_rationale": "The topics concern durable systems.",
             }
-            valid = {
-                "name": "Cooling systems",
-                "summary": "Attention changed in the supplied comparison.",
-                "commercial_interpretation": "Relevant to home systems.",
-                "brand_categories": ["HVAC"],
-                "buying_power_rating": "medium",
-                "buying_power_rationale": "The topics concern durable systems.",
-            }
+            valid = _bounded_narrative(
+                "Growing", "robust_growth", "Air quality"
+            )
             base = root / "base.json"
             _write_valid_fixture(base)
             fixture = json.loads(base.read_text(encoding="utf-8"))
@@ -290,43 +313,37 @@ class TrendPortfolioStageTest(unittest.TestCase):
                                 "cluster_id": "final-audience-cluster-0002",
                                 "responses": [
                                     {
-                                        "name": "Cooling upgrades",
-                                        "summary": "Attention is changing.",
-                                        "commercial_interpretation": "Relevant to home systems.",
-                                        "brand_categories": ["HVAC"],
-                                        "buying_power_rating": "medium",
-                                        "buying_power_rationale": "The supplied topics concern durable systems.",
+                                        **_bounded_narrative(
+                                            "Shrinking",
+                                            "robust_shrinking",
+                                            "HVAC",
+                                        ),
                                         "direction": "robust_growth",
                                     },
                                     {
-                                        "name": "Cooling upgrades",
+                                        **_bounded_narrative(
+                                            "Shrinking",
+                                            "robust_shrinking",
+                                            "HVAC",
+                                        ),
                                         "summary": "Higher prices caused readers to research cooling.",
-                                        "commercial_interpretation": "Relevant to home systems.",
-                                        "brand_categories": ["HVAC"],
-                                        "buying_power_rating": "medium",
-                                        "buying_power_rationale": "The supplied topics concern durable systems.",
                                     },
-                                    {
-                                        "name": "Cooling systems",
-                                        "summary": "Attention to cooling-system topics declined in the supplied comparison.",
-                                        "commercial_interpretation": "The topic group remains relevant to HVAC brands.",
-                                        "brand_categories": ["HVAC", "Home improvement"],
-                                        "buying_power_rating": "medium",
-                                        "buying_power_rationale": "The pages concern considered durable purchases.",
-                                    },
+                                    _bounded_narrative(
+                                        "Shrinking",
+                                        "robust_shrinking",
+                                        "HVAC",
+                                        "Home improvement",
+                                    ),
                                 ],
                             },
                             {
                                 "cluster_id": "final-audience-cluster-0001",
                                 "responses": [
-                                    {
-                                        "name": "Air quality equipment",
-                                        "summary": "Attention to air-quality equipment rose in the supplied comparison.",
-                                        "commercial_interpretation": "The topic group is relevant to home-air brands.",
-                                        "brand_categories": ["Air quality"],
-                                        "buying_power_rating": "medium",
-                                        "buying_power_rationale": "The pages concern durable household equipment.",
-                                    }
+                                    _bounded_narrative(
+                                        "Growing",
+                                        "robust_growth",
+                                        "Air quality",
+                                    )
                                 ],
                             },
                         ],

@@ -14,7 +14,7 @@ from audience_trend_miner.v2.shared import V2ContractError
 
 DEFAULT_NARRATIVE_MODEL = "openai/gpt-oss-120b"
 MAX_NARRATIVE_ATTEMPTS = 3
-NARRATIVE_PROMPT = """You write bounded commercial copy for one selected audience trend. Use only the supplied evidence. Return exactly the six requested fields. Do not return or alter direction, traffic, percentage change, coverage, confidence, or Impact Score. Do not claim causation, reader identity, income, intent, prediction, or future behavior. Do not provide hidden reasoning or chain-of-thought."""
+NARRATIVE_PROMPT = """You write bounded commercial copy for one selected audience trend. Use only the supplied evidence and return exactly the six requested fields. Copy source_cluster_name exactly as name. For summary use exactly: 'Attention to {name} topics {rose|declined} in the supplied comparison.' Choose only schema-listed brand categories and a buying-power rating. For commercial_interpretation use exactly: '{comma-separated categories} brands may find the supplied topic group commercially relevant.' For buying_power_rationale use exactly: 'The {rating} rating is a qualitative assessment based on the supplied topics' relevance to {comma-separated categories}.' Do not return or alter deterministic facts, make any other claim, or provide hidden reasoning."""
 
 _PORTFOLIO_SCHEMA_PATH = (
     Path(__file__).with_name("schemas") / "trend-portfolio.schema.json"
@@ -154,7 +154,7 @@ def generate_validated_narrative(
                 )
             )
             continue
-        errors = narrative_validation_errors(output)
+        errors = narrative_validation_errors(output, evidence)
         status = "invalid" if errors else "valid"
         attempts.append(
             NarrativeAttempt(
@@ -176,7 +176,10 @@ class NarrativeExhausted(Exception):
         self.attempts = attempts
 
 
-def narrative_validation_errors(output: object) -> tuple[str, ...]:
+def narrative_validation_errors(
+    output: object,
+    evidence: dict[str, object],
+) -> tuple[str, ...]:
     validator = jsonschema.Draft202012Validator(NARRATIVE_SCHEMA)
     schema_errors = sorted(
         (error.message.lower() for error in validator.iter_errors(output)),
@@ -195,7 +198,41 @@ def narrative_validation_errors(output: object) -> tuple[str, ...]:
         if _INVENTED_TRAFFIC.search(text)
         else ()
     )
-    return (*claim_errors, *traffic_errors)
+    return (
+        *claim_errors,
+        *traffic_errors,
+        *_bounded_template_errors(cast(dict[str, object], output), evidence),
+    )
+
+
+def _bounded_template_errors(
+    output: dict[str, object],
+    evidence: dict[str, object],
+) -> tuple[str, ...]:
+    name = evidence["source_cluster_name"]
+    direction = evidence["direction"]
+    categories = cast(list[str], output["brand_categories"])
+    rating = output["buying_power_rating"]
+    category_text = ", ".join(categories)
+    direction_word = "rose" if direction == "robust_growth" else "declined"
+    expected = {
+        "name": name,
+        "summary": (
+            f"Attention to {name} topics {direction_word} in the supplied comparison."
+        ),
+        "commercial_interpretation": (
+            f"{category_text} brands may find the supplied topic group commercially relevant."
+        ),
+        "buying_power_rationale": (
+            f"The {rating} rating is a qualitative assessment based on the supplied "
+            f"topics' relevance to {category_text}."
+        ),
+    }
+    return tuple(
+        f"{field} is outside the bounded narrative template"
+        for field, expected_value in expected.items()
+        if output[field] != expected_value
+    )
 
 
 def _strings_in(value: object) -> list[str]:

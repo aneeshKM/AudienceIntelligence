@@ -425,19 +425,23 @@ def _validate_completed_record(
     if (
         record["cluster_id"] != cluster_id
         or item != expected_item
-        or narrative_validation_errors(narrative)
+        or narrative_validation_errors(narrative, expected_input)
         or set(evidence)
         != {"cluster_id", "prompt", "model_input", "model", "attempts"}
         or evidence["cluster_id"] != cluster_id
         or evidence["prompt"] != NARRATIVE_PROMPT
         or evidence["model_input"] != expected_input
         or evidence["model"] != model
-        or not _attempts_are_consistent(attempts, narrative)
+        or not _attempts_are_consistent(attempts, narrative, expected_input)
     ):
         raise V2ContractError(conflict_message)
 
 
-def _attempts_are_consistent(attempts: object, narrative: dict[str, object]) -> bool:
+def _attempts_are_consistent(
+    attempts: object,
+    narrative: dict[str, object],
+    model_input: dict[str, object],
+) -> bool:
     if not isinstance(attempts, list) or not 1 <= len(attempts) <= 3:
         return False
     for number, attempt in enumerate(attempts, start=1):
@@ -457,7 +461,9 @@ def _attempts_are_consistent(attempts: object, narrative: dict[str, object]) -> 
             if validation != "not_run" or attempt["output"] is not None or not errors:
                 return False
         elif delivery == "delivered" and validation == "invalid":
-            expected_errors = narrative_validation_errors(attempt["output"])
+            expected_errors = narrative_validation_errors(
+                attempt["output"], model_input
+            )
             if not expected_errors or errors != list(expected_errors):
                 return False
         elif delivery == "delivered" and validation == "valid":
