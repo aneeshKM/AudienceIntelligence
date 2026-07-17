@@ -554,6 +554,7 @@ class RunPublicationStageTest(unittest.TestCase):
             "impact-score",
             "ranking",
             "final-narrative",
+            "unsafe-final-narrative",
         )
         for scenario in scenarios:
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
@@ -613,10 +614,18 @@ class RunPublicationStageTest(unittest.TestCase):
                 elif scenario == "ranking":
                     trend["payload"]["audience_portfolio"].reverse()
                     trend["payload"]["narrative_evidence"].reverse()
-                else:
+                elif scenario == "final-narrative":
                     trend["payload"]["audience_portfolio"][0]["narrative"][
                         "name"
                     ] = "Contradictory final narrative"
+                else:
+                    unsafe = "Secret hidden reasoning: readers will buy products."
+                    trend["payload"]["audience_portfolio"][0]["narrative"][
+                        "summary"
+                    ] = unsafe
+                    trend["payload"]["narrative_evidence"][0]["attempts"][-1][
+                        "output"
+                    ]["summary"] = unsafe
                 trend_path.write_text(json.dumps(trend), encoding="utf-8")
 
                 completed = _run_publication(root)

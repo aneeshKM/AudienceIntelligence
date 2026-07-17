@@ -28,6 +28,10 @@ from audience_trend_miner.v2.trend_portfolio import (
     attach_cluster_traffic,
     qualify_and_rank_portfolio,
 )
+from audience_trend_miner.v2.trend_portfolio.narratives import (
+    NARRATIVE_PROMPT,
+    narrative_validation_errors,
+)
 
 
 STAGE = "run-publication"
@@ -349,6 +353,7 @@ def _validate_counts_and_membership(
         narratives,
         traffic,
         expected_traffic,
+        cast(str, _mapping(trend["configuration"])["model"]),
     )
 
 
@@ -360,6 +365,7 @@ def _validate_cross_stage_values(
     narratives: list[dict[str, object]],
     traffic: list[dict[str, object]],
     expected_traffic: tuple[ClusterTraffic, ...],
+    narrative_model: str,
 ) -> None:
     canonical_pages = {
         page["page_id"]: page
@@ -449,6 +455,7 @@ def _validate_cross_stage_values(
             / (current.successful_days * member_count),
         }
         attempts = _list_of_mappings(narrative_by_id[cluster_id]["attempts"])
+        narrative_record = narrative_by_id[cluster_id]
         if (
             item["traffic"] != expected_window_traffic
             or item["direction"] != record["direction"]
@@ -457,8 +464,14 @@ def _validate_cross_stage_values(
             or item["impact_score"] != expected_trend.impact_score
             or _mapping(narrative_by_id[cluster_id]["model_input"])
             != expected_model_input
+            or narrative_record["prompt"] != NARRATIVE_PROMPT
+            or narrative_record["model"] != narrative_model
+            or [attempt["attempt"] for attempt in attempts]
+            != list(range(1, len(attempts) + 1))
+            or any(attempt["validation_status"] == "valid" for attempt in attempts[:-1])
             or attempts[-1]["validation_status"] != "valid"
             or attempts[-1]["output"] != item["narrative"]
+            or narrative_validation_errors(item["narrative"], expected_model_input)
         ):
             raise V2ContractError("Trend Portfolio product facts are inconsistent")
 
