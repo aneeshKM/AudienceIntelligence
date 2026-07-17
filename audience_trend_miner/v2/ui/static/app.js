@@ -8,6 +8,7 @@ const runStatus = document.querySelector("#run-status");
 const progressSection = document.querySelector("#progress");
 const progressFeed = document.querySelector("#progress-feed");
 const followButton = document.querySelector("#follow-progress");
+const cancelButton = document.querySelector("#cancel-run");
 const portfolioSection = document.querySelector("#portfolio");
 const portfolioDates = document.querySelector("#portfolio-dates");
 const emptyPortfolio = document.querySelector("#empty-portfolio");
@@ -71,6 +72,35 @@ followButton.addEventListener("click", () => {
   scrollToLatest();
 });
 
+cancelButton.addEventListener("click", async () => {
+  const runId = activeRun?.id;
+  if (!runId) return;
+  const confirmed = window.confirm(
+    `Cancel ${runId}? Completed artifacts and progress history will be kept.`,
+  );
+  if (!confirmed) return;
+  cancelButton.disabled = true;
+  setStatus(`Cancelling ${runId}…`);
+  try {
+    const response = await fetch(
+      `/api/runs/${encodeURIComponent(runId)}/cancel`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmed: true }),
+      },
+    );
+    if (!response.ok) throw new Error(await responseDetail(response));
+    stopStreaming();
+    pollGeneration += 1;
+    finishControls(true);
+    setStatus(`${runId} cancelled. Progress and completed work were retained.`);
+  } catch (error) {
+    cancelButton.disabled = false;
+    setStatus(error.message || "The run could not be cancelled.", true);
+  }
+});
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!form.reportValidity()) return;
@@ -115,6 +145,8 @@ function beginRun(runId, asOf, clearExisting) {
   portfolioSection.hidden = true;
   progressSection.hidden = false;
   startButton.disabled = true;
+  cancelButton.disabled = false;
+  cancelButton.hidden = false;
   startButton.querySelector("span").textContent = "Run in progress";
   setStatus(`Starting ${runId}…`);
   setFollowing(true);
@@ -122,6 +154,8 @@ function beginRun(runId, asOf, clearExisting) {
 
 function finishControls(retry) {
   startButton.disabled = false;
+  cancelButton.hidden = true;
+  cancelButton.disabled = false;
   startButton.querySelector("span").textContent = retry
     ? "Retry or resume run"
     : "Start or resume run";
@@ -195,6 +229,12 @@ async function pollRun(runId, generation) {
           timestamp: new Date().toISOString(),
         });
         setStatus(`${runId} failed. ${message} Progress is retained for retry.`, true);
+        finishControls(true);
+        return;
+      }
+      if (state.status === "cancelled") {
+        stopStreaming();
+        setStatus(`${runId} cancelled. Progress and completed work were retained.`);
         finishControls(true);
         return;
       }

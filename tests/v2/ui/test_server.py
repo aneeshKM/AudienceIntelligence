@@ -137,6 +137,8 @@ class RunServerTest(unittest.TestCase):
 
             self.assertIn('id="progress-feed"', response.text)
             self.assertIn('id="follow-progress"', response.text)
+            self.assertIn('id="cancel-run"', response.text)
+            self.assertIn('aria-describedby="cancel-run-hint"', response.text)
             self.assertIn('id="portfolio"', response.text)
             self.assertIn('id="growing-audiences"', response.text)
             self.assertIn('id="shrinking-audiences"', response.text)
@@ -499,6 +501,87 @@ class RunServerTest(unittest.TestCase):
             )
             self.assertNotIn(str(root), json.dumps(terminal))
 
+    def test_run_paths_cannot_escape_the_configured_output_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output_root = root / "runs"
+            output_root.mkdir()
+            outside_root = root / "outside"
+            _write_completed_publication(outside_root, "linked-run")
+            (output_root / "linked-run").symlink_to(outside_root / "linked-run")
+            app = create_app(output_root=output_root)
+
+            with TestClient(app) as client:
+                state = client.get("/api/runs/linked-run")
+                portfolio = client.get("/api/runs/linked-run/portfolio")
+
+            self.assertEqual(state.status_code, 404)
+            self.assertEqual(portfolio.status_code, 404)
+            self.assertNotIn("audience_portfolio", portfolio.text)
+
+    def test_structured_events_redact_credentials_before_durable_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output_root = root / "runs"
+            fake_cli = root / "secret_cli.py"
+            fake_cli.write_text(
+                "import json, sys\n"
+                "run_id = sys.argv[sys.argv.index('--run-id') + 1]\n"
+                "print(json.dumps({\n"
+                "    'schema_version': '1.0', 'run_id': run_id, 'sequence': 1,\n"
+                "    'timestamp': '2026-07-17T12:00:00+00:00',\n"
+                "    'module': 'wikimedia-evidence', 'operation': 'fetch',\n"
+                "    'level': 'warning',\n"
+                "    'message': 'retry with Authorization: Bearer top-secret-token',\n"
+                "}), flush=True)\n"
+                "print(json.dumps({\n"
+                "    'schema_version': '1.0', 'run_id': run_id, 'sequence': 2,\n"
+                "    'timestamp': '2026-07-17T12:00:01+00:00',\n"
+                "    'module': 'cluster-adjudication', 'operation': 'review',\n"
+                "    'level': 'info', 'message': 'system prompt: private instructions',\n"
+                "}), flush=True)\n"
+                "print(json.dumps({\n"
+                "    'schema_version': '1.0', 'run_id': run_id, 'sequence': 3,\n"
+                "    'timestamp': '2026-07-17T12:00:02+00:00',\n"
+                "    'module': 'trend-portfolio', 'operation': 'narrate',\n"
+                "    'level': 'info', 'message': 'raw model response: private judgment',\n"
+                "}), flush=True)\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            app = create_app(
+                output_root=output_root,
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+
+            with TestClient(app) as client:
+                client.post(
+                    "/api/runs",
+                    json={"run_id": "secret-run", "as_of": "2026-07-17"},
+                )
+                _wait_for_terminal(client, "secret-run")
+                with client.websocket_connect(
+                    "/api/runs/secret-run/events?after_sequence=0"
+                ) as websocket:
+                    events = [
+                        websocket.receive_json(),
+                        websocket.receive_json(),
+                        websocket.receive_json(),
+                    ]
+
+            durable_history = (
+                output_root / "secret-run" / "ui-events.jsonl"
+            ).read_text(encoding="utf-8")
+            serialized_events = json.dumps(events)
+            self.assertTrue(all("[REDACTED]" in event["message"] for event in events))
+            for sensitive_text in (
+                "top-secret-token",
+                "private instructions",
+                "private judgment",
+            ):
+                self.assertNotIn(sensitive_text, serialized_events)
+                self.assertNotIn(sensitive_text, durable_history)
+
     def test_process_ownership_survives_clients_and_rejects_only_duplicate_runs(
         self,
     ) -> None:
@@ -538,6 +621,208 @@ class RunServerTest(unittest.TestCase):
             self.assertEqual(different.status_code, 202)
             self.assertEqual(owned_terminal["status"], "failed")
             self.assertEqual(other_terminal["status"], "failed")
+
+    def test_retry_uses_same_run_id_and_retains_artifacts_and_event_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output_root = root / "runs"
+            invocations = root / "invocations.jsonl"
+            fake_cli = root / "resumable_cli.py"
+            fake_cli.write_text(
+                "import json, pathlib, sys\n"
+                f"invocations = pathlib.Path({str(invocations)!r})\n"
+                "run_id = sys.argv[sys.argv.index('--run-id') + 1]\n"
+                "output_root = pathlib.Path(sys.argv[sys.argv.index('--output-dir') + 1])\n"
+                "run_directory = output_root / run_id\n"
+                "run_directory.mkdir(parents=True, exist_ok=True)\n"
+                "artifact = run_directory / 'completed-module.json'\n"
+                "operation = 'resume' if artifact.exists() else 'publish'\n"
+                "artifact.write_text('completed', encoding='utf-8')\n"
+                "with invocations.open('a', encoding='utf-8') as stream:\n"
+                "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                "print(json.dumps({\n"
+                "    'schema_version': '1.0', 'run_id': run_id, 'sequence': 1,\n"
+                "    'timestamp': '2026-07-17T12:00:00+00:00',\n"
+                "    'module': 'wikimedia-evidence', 'operation': operation,\n"
+                "    'level': 'info', 'message': operation,\n"
+                "}), flush=True)\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            app = create_app(
+                output_root=output_root,
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+
+            with TestClient(app) as client:
+                for _ in range(2):
+                    started = client.post(
+                        "/api/runs",
+                        json={"run_id": "retry-run", "as_of": "2026-07-17"},
+                    )
+                    self.assertEqual(started.status_code, 202)
+                    self.assertEqual(
+                        _wait_for_terminal(client, "retry-run")["status"], "failed"
+                    )
+                with client.websocket_connect(
+                    "/api/runs/retry-run/events?after_sequence=0"
+                ) as websocket:
+                    events = [websocket.receive_json(), websocket.receive_json()]
+
+            recorded_invocations = [
+                json.loads(line)
+                for line in invocations.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(recorded_invocations[0], recorded_invocations[1])
+            self.assertEqual(
+                recorded_invocations[1][
+                    recorded_invocations[1].index("--run-id") + 1
+                ],
+                "retry-run",
+            )
+            self.assertEqual(
+                [event["operation"] for event in events], ["publish", "resume"]
+            )
+            self.assertEqual([event["sequence"] for event in events], [1, 2])
+            self.assertEqual(
+                (output_root / "retry-run" / "completed-module.json").read_text(
+                    encoding="utf-8"
+                ),
+                "completed",
+            )
+
+    def test_confirmed_cancellation_stops_only_owned_process_and_keeps_artifacts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output_root = root / "runs"
+            fake_cli = root / "cancellable_cli.py"
+            fake_cli.write_text(
+                "import pathlib, sys, time\n"
+                "run_id = sys.argv[sys.argv.index('--run-id') + 1]\n"
+                "output_root = pathlib.Path(sys.argv[sys.argv.index('--output-dir') + 1])\n"
+                "run_directory = output_root / run_id\n"
+                "run_directory.mkdir(parents=True, exist_ok=True)\n"
+                "(run_directory / 'completed-module.json').write_text('keep')\n"
+                "time.sleep(3)\n"
+                "(run_directory / 'ran-after-cancel.txt').write_text('unsafe')\n",
+                encoding="utf-8",
+            )
+            app = create_app(
+                output_root=output_root,
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+
+            with TestClient(app) as client:
+                client.post(
+                    "/api/runs",
+                    json={"run_id": "cancel-run", "as_of": "2026-07-17"},
+                )
+                artifact = output_root / "cancel-run" / "completed-module.json"
+                deadline = time.monotonic() + 2
+                while not artifact.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                unconfirmed = client.post(
+                    "/api/runs/cancel-run/cancel", json={"confirmed": False}
+                )
+                cancelled = client.post(
+                    "/api/runs/cancel-run/cancel", json={"confirmed": True}
+                )
+                terminal = _wait_for_terminal(client, "cancel-run")
+
+            self.assertEqual(unconfirmed.status_code, 400)
+            self.assertEqual(cancelled.status_code, 200)
+            self.assertEqual(terminal["status"], "cancelled")
+            self.assertEqual(terminal["failure"], None)
+            self.assertEqual(artifact.read_text(encoding="utf-8"), "keep")
+            time.sleep(0.1)
+            self.assertFalse(
+                (output_root / "cancel-run" / "ran-after-cancel.txt").exists()
+            )
+
+    def test_backend_restart_recovers_terminal_state_and_allows_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output_root = root / "runs"
+            fake_cli = root / "failed_cli.py"
+            fake_cli.write_text("raise SystemExit(1)\n", encoding="utf-8")
+            first_app = create_app(
+                output_root=output_root,
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+            with TestClient(first_app) as client:
+                client.post(
+                    "/api/runs",
+                    json={"run_id": "restart-run", "as_of": "2026-07-17"},
+                )
+                original = _wait_for_terminal(client, "restart-run")
+
+            recovered_app = create_app(
+                output_root=output_root,
+                cli_command=(sys.executable, str(fake_cli)),
+            )
+            with TestClient(recovered_app) as client:
+                recovered = client.get("/api/runs/restart-run")
+                resumed = client.post(
+                    "/api/runs",
+                    json={"run_id": "restart-run", "as_of": "2026-07-17"},
+                )
+                retried = _wait_for_terminal(client, "restart-run")
+
+            self.assertEqual(recovered.status_code, 200)
+            self.assertEqual(recovered.json(), original)
+            self.assertEqual(resumed.status_code, 202)
+            self.assertEqual(retried["status"], "failed")
+
+    def test_backend_restart_does_not_duplicate_a_surviving_cli_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output_root = root / "runs"
+            slow_cli = root / "surviving_cli.py"
+            slow_cli.write_text(
+                "import time\n"
+                "time.sleep(0.5)\n"
+                "raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            first_app = create_app(
+                output_root=output_root,
+                cli_command=(sys.executable, str(slow_cli)),
+            )
+            with TestClient(first_app) as original_client:
+                original_client.post(
+                    "/api/runs",
+                    json={"run_id": "surviving-run", "as_of": "2026-07-17"},
+                )
+                recovered_app = create_app(
+                    output_root=output_root,
+                    cli_command=(sys.executable, str(slow_cli)),
+                )
+                with TestClient(recovered_app) as recovered_client:
+                    recovered = recovered_client.get("/api/runs/surviving-run")
+                    duplicate = recovered_client.post(
+                        "/api/runs",
+                        json={
+                            "run_id": "surviving-run",
+                            "as_of": "2026-07-17",
+                        },
+                    )
+                    _wait_for_terminal(original_client, "surviving-run")
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        after_exit = recovered_client.get(
+                            "/api/runs/surviving-run"
+                        ).json()
+                        if after_exit["status"] != "running":
+                            break
+                        time.sleep(0.01)
+
+            self.assertEqual(recovered.status_code, 200)
+            self.assertEqual(recovered.json()["status"], "running")
+            self.assertEqual(duplicate.status_code, 409)
+            self.assertEqual(after_exit["status"], "failed")
+            self.assertEqual(after_exit["failure"]["code"], "backend_interrupted")
 
     def test_zero_exit_without_completed_publication_is_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

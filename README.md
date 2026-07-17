@@ -67,6 +67,21 @@ delivery, so reconnecting with the last received sequence replays only the
 missing suffix and then continues with live events. This history remains
 available after a server restart.
 
+Failed runs can be submitted again with the same run ID; the global CLI resumes
+completed modules while the UI appends new events to the existing history.
+`POST /api/runs/{run_id}/cancel` requires `{"confirmed": true}`, terminates only
+the subprocess owned for that run, records a durable `cancelled` state, and keeps
+all run artifacts. Run state is persisted under the confined output root so a
+restarted backend can expose the prior terminal state and offer resume.
+
+The browser workflow tests require Playwright and its Chromium runtime:
+
+```bash
+python3 -m pip install -e '.[browser-test]'
+python3 -m playwright install chromium
+python3 -m unittest tests.v2.ui.test_browser
+```
+
 Use a stable run identifier to resume interrupted Wikimedia work without
 refetching completed evidence:
 

@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from threading import Lock, Thread
 from typing import Annotated, Literal, Sequence
@@ -23,12 +24,18 @@ from pydantic import BaseModel, Field
 from starlette.staticfiles import StaticFiles
 
 from audience_trend_miner.v2.run_publication import validate_completed_publication
-from audience_trend_miner.v2.shared import BoundedProgress, ProgressEvent, V2ContractError
+from audience_trend_miner.v2.shared import (
+    BoundedProgress,
+    ProgressEvent,
+    V2ContractError,
+    atomic_write_json,
+)
 
 
 DEFAULT_HOST = "127.0.0.1"
 RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 EVENT_HISTORY_NAME = "ui-events.jsonl"
+RUN_STATE_NAME = "ui-state.json"
 STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 
@@ -37,11 +44,15 @@ class StartRunRequest(BaseModel):
     as_of: date
 
 
+class CancelRunRequest(BaseModel):
+    confirmed: bool
+
+
 @dataclass
 class _RunState:
     run_id: str
     as_of: date
-    status: Literal["running", "succeeded", "failed"] = "running"
+    status: Literal["running", "succeeded", "failed", "cancelled"] = "running"
     exit_code: int | None = None
     failure: dict[str, str] | None = None
 
@@ -153,17 +164,29 @@ class _RunEventLog:
 
 
 class _RunSupervisor:
-    def __init__(self, output_root: Path, cli_command: Sequence[str]) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        cli_command: Sequence[str],
+        cli_arguments: Sequence[str],
+    ) -> None:
         self._output_root = output_root
         self._cli_command = tuple(cli_command)
+        self._cli_arguments = tuple(cli_arguments)
         self._states: dict[str, _RunState] = {}
         self._event_logs: dict[str, _RunEventLog] = {}
+        self._processes: dict[str, subprocess.Popen[str]] = {}
+        self._unowned_process_ids: dict[str, int] = {}
         self._lock = Lock()
 
     def start(self, request: StartRunRequest) -> dict[str, object]:
         with self._lock:
-            existing = self._states.get(request.run_id)
-            if existing is not None and existing.status == "running":
+            existing = self._load_and_recover_state(request.run_id)
+            if (
+                existing is not None
+                and existing.status == "running"
+                or request.run_id in self._unowned_process_ids
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A process is already active for this run ID.",
@@ -179,6 +202,7 @@ class _RunSupervisor:
                 str(self._output_root),
                 "--progress-format",
                 "json",
+                *self._cli_arguments,
             ]
             event_log = self._event_log(request.run_id)
             try:
@@ -203,12 +227,15 @@ class _RunSupervisor:
                         "message": "The run command could not be started.",
                     },
                 )
+                self._persist_state(self._states[request.run_id])
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="The run command could not be started.",
                 ) from error
             state = _RunState(run_id=request.run_id, as_of=request.as_of)
             self._states[request.run_id] = state
+            self._processes[request.run_id] = process
+            self._persist_state(state, process=process)
             Thread(
                 target=self._monitor_process,
                 args=(state, process, event_log),
@@ -219,12 +246,42 @@ class _RunSupervisor:
 
     def get(self, run_id: str) -> dict[str, object]:
         with self._lock:
-            state = self._states.get(run_id)
+            state = self._load_and_recover_state(run_id)
             if state is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Run state was not found.",
                 )
+            return state.response()
+
+    def cancel(self, run_id: str, *, confirmed: bool) -> dict[str, object]:
+        if not confirmed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cancellation must be explicitly confirmed.",
+            )
+        with self._lock:
+            state = self._load_and_recover_state(run_id)
+            if state is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Run state was not found.",
+                )
+            if state.status != "running":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="The run is not active.",
+                )
+            process = self._processes.get(run_id)
+            if process is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="The active process is not owned by this server.",
+                )
+            state.status = "cancelled"
+            state.failure = None
+            self._persist_state(state, process=process)
+            process.terminate()
             return state.response()
 
     def subscribe(
@@ -285,16 +342,22 @@ class _RunSupervisor:
         exit_code = process.wait()
         with self._lock:
             state.exit_code = exit_code
+            if self._processes.get(state.run_id) is process:
+                del self._processes[state.run_id]
+            if state.status == "cancelled":
+                self._persist_state(state)
+                return
             if exit_code != 0:
                 state.status = "failed"
                 state.failure = {
                     "code": "cli_exit_nonzero",
                     "message": "The run command exited unsuccessfully.",
                 }
+                self._persist_state(state)
                 return
             try:
                 validate_completed_publication(
-                    self._output_root / state.run_id / "publication",
+                    self.publication_directory(state.run_id),
                     run_id=state.run_id,
                     as_of_date=state.as_of,
                 )
@@ -304,8 +367,96 @@ class _RunSupervisor:
                     "code": "publication_incomplete",
                     "message": "The run did not produce a complete publication.",
                 }
+                self._persist_state(state)
                 return
             state.status = "succeeded"
+            self._persist_state(state)
+
+    def _load_and_recover_state(self, run_id: str) -> _RunState | None:
+        state = self._states.get(run_id)
+        if state is not None:
+            self._refresh_unowned_process(run_id, state)
+            return state
+        path = self._state_path(run_id)
+        if not path.is_file():
+            return None
+        try:
+            persisted = json.loads(path.read_text(encoding="utf-8"))
+            if set(persisted) != {"schema_version", "state", "process_id"}:
+                raise ValueError
+            if persisted["schema_version"] != "1.0":
+                raise ValueError
+            record = persisted["state"]
+            if not isinstance(record, dict) or set(record) != {
+                "run_id",
+                "as_of",
+                "status",
+                "exit_code",
+                "failure",
+            }:
+                raise ValueError
+            process_id = persisted["process_id"]
+            if process_id is not None and (
+                type(process_id) is not int or process_id <= 0
+            ):
+                raise ValueError
+            state = _RunState(
+                run_id=record["run_id"],
+                as_of=date.fromisoformat(record["as_of"]),
+                status=record["status"],
+                exit_code=record["exit_code"],
+                failure=record["failure"],
+            )
+            if state.run_id != run_id or state.status not in {
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+            }:
+                raise ValueError
+        except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError) as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Run state is invalid.",
+            ) from error
+        self._states[run_id] = state
+        if process_id is not None:
+            self._unowned_process_ids[run_id] = process_id
+        self._refresh_unowned_process(run_id, state)
+        return state
+
+    def _refresh_unowned_process(self, run_id: str, state: _RunState) -> None:
+        process_id = self._unowned_process_ids.get(run_id)
+        if process_id is None or _process_is_alive(process_id):
+            return
+        del self._unowned_process_ids[run_id]
+        if state.status == "running":
+            state.status = "failed"
+            state.failure = {
+                "code": "backend_interrupted",
+                "message": "The backend stopped while the run was active. Resume is available.",
+            }
+        self._persist_state(state)
+
+    def _persist_state(
+        self,
+        state: _RunState,
+        *,
+        process: subprocess.Popen[str] | None = None,
+    ) -> None:
+        path = self._state_path(state.run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        process_id = None
+        if process is not None and process.poll() is None:
+            process_id = process.pid
+        atomic_write_json(
+            path,
+            {
+                "schema_version": "1.0",
+                "state": state.response(),
+                "process_id": process_id,
+            },
+        )
 
     def _event_log(self, run_id: str) -> _RunEventLog:
         event_log = self._event_logs.get(run_id)
@@ -315,7 +466,23 @@ class _RunSupervisor:
         return event_log
 
     def _history_path(self, run_id: str) -> Path:
-        return self._output_root / run_id / EVENT_HISTORY_NAME
+        return self._run_directory(run_id) / EVENT_HISTORY_NAME
+
+    def _state_path(self, run_id: str) -> Path:
+        return self._run_directory(run_id) / RUN_STATE_NAME
+
+    def publication_directory(self, run_id: str) -> Path:
+        return self._run_directory(run_id) / "publication"
+
+    def _run_directory(self, run_id: str) -> Path:
+        candidate = self._output_root / run_id
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(self._output_root):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Run state was not found.",
+            )
+        return candidate
 
 
 def _progress_event(record: object, *, expected_run_id: str) -> ProgressEvent:
@@ -364,7 +531,7 @@ def _progress_event(record: object, *, expected_run_id: str) -> ProgressEvent:
         module=record["module"],
         operation=record["operation"],
         level=record["level"],
-        message=record["message"],
+        message=_redact_message(record["message"]),
         progress=progress,
     )
     try:
@@ -374,13 +541,49 @@ def _progress_event(record: object, *, expected_run_id: str) -> ProgressEvent:
     return event
 
 
+def _redact_message(message: object) -> str:
+    if not isinstance(message, str):
+        raise V2ContractError("progress event message is invalid")
+    if re.search(
+        r"(?i)\b(system\s+prompt|user\s+prompt|raw\s+(?:model\s+)?response|"
+        r"hidden\s+reasoning)\b",
+        message,
+    ):
+        return "Sensitive run detail was [REDACTED]."
+    redacted = re.sub(
+        r"(?i)\b(authorization\s*:\s*bearer|api[_-]?key|token|secret|password)"
+        r"\s*[:=]?\s*\S+",
+        r"\1 [REDACTED]",
+        message,
+    )
+    for name, value in os.environ.items():
+        if (
+            value
+            and len(value) >= 8
+            and name.upper().endswith(("KEY", "TOKEN", "SECRET", "PASSWORD"))
+        ):
+            redacted = redacted.replace(value, "[REDACTED]")
+    return redacted
+
+
+def _process_is_alive(process_id: int) -> bool:
+    try:
+        os.kill(process_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def create_app(
     *,
     output_root: Path,
     cli_command: Sequence[str] = ("audience-trend-miner",),
+    cli_arguments: Sequence[str] = (),
 ) -> FastAPI:
     """Create the loopback application's process-control API."""
-    supervisor = _RunSupervisor(output_root.resolve(), cli_command)
+    supervisor = _RunSupervisor(output_root.resolve(), cli_command, cli_arguments)
     app = FastAPI(title="AudienceIntelligence V2")
     app.mount("/assets", StaticFiles(directory=STATIC_DIRECTORY), name="assets")
 
@@ -398,11 +601,18 @@ def create_app(
     ) -> dict[str, object]:
         return supervisor.get(run_id)
 
+    @app.post("/api/runs/{run_id}/cancel")
+    def cancel_run(
+        request: CancelRunRequest,
+        run_id: Annotated[str, ApiPath(pattern=RUN_ID_PATTERN)],
+    ) -> dict[str, object]:
+        return supervisor.cancel(run_id, confirmed=request.confirmed)
+
     @app.get("/api/runs/{run_id}/portfolio", response_class=JSONResponse)
     def get_portfolio(
         run_id: Annotated[str, ApiPath(pattern=RUN_ID_PATTERN)],
     ) -> JSONResponse:
-        publication_directory = output_root.resolve() / run_id / "publication"
+        publication_directory = supervisor.publication_directory(run_id)
         try:
             validate_completed_publication(publication_directory, run_id=run_id)
             portfolio = json.loads(
