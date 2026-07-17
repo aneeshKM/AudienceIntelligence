@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Protocol, Sequence, TypedDict, cast
+from typing import Callable, Literal, Protocol, Sequence, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
 
@@ -72,6 +72,36 @@ class AdjudicationAdapter(Protocol):
 
 
 @dataclass(frozen=True)
+class ProviderAttempt:
+    attempt: int
+    delivery_status: Literal["delivered", "error"]
+    error: str | None
+
+    def record(self) -> dict[str, object]:
+        return {
+            "attempt": self.attempt,
+            "delivery_status": self.delivery_status,
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class ModelStepRecord:
+    role: AdjudicationRole
+    status: Literal["completed", "exhausted"]
+    validation_status: Literal["valid", "invalid", "not_run"]
+    attempts: tuple[ProviderAttempt, ...]
+
+    def record(self) -> dict[str, object]:
+        return {
+            "role": self.role,
+            "status": self.status,
+            "validation_status": self.validation_status,
+            "attempts": [attempt.record() for attempt in self.attempts],
+        }
+
+
+@dataclass(frozen=True)
 class AcceptedGroup:
     name: str
     rationale: str
@@ -91,6 +121,7 @@ class ClusterAdjudicationResult:
     rejected_members: tuple[dict[str, object], ...]
     validation_status: str
     validation_errors: tuple[str, ...]
+    steps: tuple[ModelStepRecord, ...] = ()
 
     def record(self) -> dict[str, object]:
         return {
@@ -116,13 +147,71 @@ class _GraphState(TypedDict, total=False):
 def execute_cluster_adjudication(
     preliminary_cluster: object,
     adapter: AdjudicationAdapter,
+    *,
+    step_progress: Callable[[ModelStepRecord], None] | None = None,
 ) -> ClusterAdjudicationResult:
     """Adjudicate one Preliminary Cluster with bounded critique and revision."""
     members = _model_visible_members(preliminary_cluster)
+    steps: list[ModelStepRecord] = []
+
+    def invoke(request: AdjudicationRequest) -> object:
+        attempts: list[ProviderAttempt] = []
+        for attempt_number in range(1, 4):
+            try:
+                output = adapter.invoke(request)
+            except Exception as error:
+                attempts.append(
+                    ProviderAttempt(
+                        attempt=attempt_number,
+                        delivery_status="error",
+                        error=f"{type(error).__name__}: {error}",
+                    )
+                )
+                continue
+            attempts.append(
+                ProviderAttempt(
+                    attempt=attempt_number,
+                    delivery_status="delivered",
+                    error=None,
+                )
+            )
+            steps.append(
+                ModelStepRecord(
+                    role=request.role,
+                    status="completed",
+                    validation_status="not_run",
+                    attempts=tuple(attempts),
+                )
+            )
+            return output
+        exhausted = ModelStepRecord(
+            role=request.role,
+            status="exhausted",
+            validation_status="not_run",
+            attempts=tuple(attempts),
+        )
+        steps.append(exhausted)
+        if step_progress is not None:
+            step_progress(exhausted)
+        raise _DeliveryExhausted(request.role)
+
+    def finish_validation(role: AdjudicationRole, status: Literal["valid", "invalid"]) -> None:
+        previous = steps[-1]
+        if previous.role != role:
+            raise RuntimeError("adjudication step validation is out of order")
+        completed = ModelStepRecord(
+            role=previous.role,
+            status=previous.status,
+            validation_status=status,
+            attempts=previous.attempts,
+        )
+        steps[-1] = completed
+        if step_progress is not None:
+            step_progress(completed)
 
     def propose(state: _GraphState) -> _GraphState:
         return {
-            "proposal": adapter.invoke(
+            "proposal": invoke(
                 AdjudicationRequest(
                     role="proposer",
                     prompt=PROPOSER_PROMPT,
@@ -132,15 +221,15 @@ def execute_cluster_adjudication(
         }
 
     def validate_proposal(state: _GraphState) -> _GraphState:
-        return {
-            "proposal_result": _validated_result(
-                state["members"], state["proposal"]
-            )
-        }
+        result = _validated_result(state["members"], state["proposal"])
+        finish_validation(
+            "proposer", "valid" if result.validation_status == "valid" else "invalid"
+        )
+        return {"proposal_result": result}
 
     def critique(state: _GraphState) -> _GraphState:
         proposal_result = state["proposal_result"]
-        model_output = adapter.invoke(
+        model_output = invoke(
             AdjudicationRequest(
                 role="critic",
                 prompt=CRITIC_PROMPT,
@@ -149,9 +238,11 @@ def execute_cluster_adjudication(
                 validation_errors=proposal_result.validation_errors,
             )
         )
+        parsed = _parse_critique(state["members"], model_output)
+        finish_validation("critic", "valid" if parsed is not None else "invalid")
         return {
             "critique": model_output,
-            "critique_decision": _parse_critique(state["members"], model_output),
+            "critique_decision": parsed,
         }
 
     def after_critique(state: _GraphState) -> str:
@@ -171,7 +262,7 @@ def execute_cluster_adjudication(
     def revise(state: _GraphState) -> _GraphState:
         proposal_result = state["proposal_result"]
         return {
-            "revision": adapter.invoke(
+            "revision": invoke(
                 AdjudicationRequest(
                     role="reviser",
                     prompt=REVISER_PROMPT,
@@ -184,14 +275,16 @@ def execute_cluster_adjudication(
         }
 
     def validate_revision(state: _GraphState) -> _GraphState:
-        return {
-            "result": _validated_revision_result(
-                state["members"],
-                state["proposal"],
-                cast(CritiqueDecision, state["critique_decision"]),
-                state["revision"],
-            )
-        }
+        result = _validated_revision_result(
+            state["members"],
+            state["proposal"],
+            cast(CritiqueDecision, state["critique_decision"]),
+            state["revision"],
+        )
+        finish_validation(
+            "reviser", "valid" if result.validation_status == "valid" else "invalid"
+        )
+        return {"result": result}
 
     def reject_invalid_critique(state: _GraphState) -> _GraphState:
         return {"result": _invalid_result(state["members"], ("invalid_critique",))}
@@ -220,8 +313,24 @@ def execute_cluster_adjudication(
     builder.add_edge("revise", "validate_revision")
     builder.add_edge("validate_revision", END)
     builder.add_edge("reject_invalid_critique", END)
-    completed = builder.compile().invoke({"members": members})
-    return cast(ClusterAdjudicationResult, completed["result"])
+    try:
+        completed = builder.compile().invoke({"members": members})
+        result = cast(ClusterAdjudicationResult, completed["result"])
+    except _DeliveryExhausted as error:
+        result = _invalid_result(members, (f"exhausted_delivery:{error.role}",))
+    return ClusterAdjudicationResult(
+        accepted_groups=result.accepted_groups,
+        rejected_members=result.rejected_members,
+        validation_status=result.validation_status,
+        validation_errors=result.validation_errors,
+        steps=tuple(steps),
+    )
+
+
+class _DeliveryExhausted(RuntimeError):
+    def __init__(self, role: AdjudicationRole) -> None:
+        super().__init__(f"{role} delivery exhausted")
+        self.role = role
 
 
 def _parse_critique(

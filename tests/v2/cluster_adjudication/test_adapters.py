@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+import json
+import unittest
+
+from audience_trend_miner.v2.cluster_adjudication import AdjudicationRequest
+from audience_trend_miner.v2.cluster_adjudication.adapters import (
+    LangChainGroqAdjudicationAdapter,
+)
+
+
+class _FakeStructuredRunnable:
+    def __init__(self, output: object) -> None:
+        self.output = output
+        self.messages: object = None
+
+    def invoke(self, messages: object) -> object:
+        self.messages = messages
+        return self.output
+
+
+class _FakeChatModel:
+    def __init__(self, output: object) -> None:
+        self.runnable = _FakeStructuredRunnable(output)
+        self.schema: object = None
+        self.options: dict[str, object] = {}
+
+    def with_structured_output(self, schema: object, **options: object) -> _FakeStructuredRunnable:
+        self.schema = schema
+        self.options = options
+        return self.runnable
+
+
+class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
+    def test_adapter_requests_provider_schema_without_exposing_disallowed_evidence(self) -> None:
+        parsed = {
+            "groups": [
+                {
+                    "name": "Home Air Purification",
+                    "page_ids": [101, 102],
+                    "rationale": "Shared products.",
+                }
+            ],
+            "rejected": [],
+        }
+        chat_model = _FakeChatModel(
+            {"raw": object(), "parsed": parsed, "parsing_error": None}
+        )
+        adapter = LangChainGroqAdjudicationAdapter(
+            model="fixture/model", chat_model=chat_model
+        )
+        request = AdjudicationRequest(
+            role="proposer",
+            prompt="proposer prompt",
+            members=(
+                {
+                    "page_id": 101,
+                    "canonical_title": "Air purifier",
+                    "lead": "Lead.",
+                    "selected_categories": ["Air filters"],
+                },
+            ),
+        )
+
+        result = adapter.invoke(request)
+
+        self.assertEqual(result, parsed)
+        self.assertEqual(
+            chat_model.options,
+            {"method": "json_schema", "include_raw": True},
+        )
+        messages = chat_model.runnable.messages
+        self.assertIsInstance(messages, list)
+        model_payload = json.loads(messages[1].content)
+        self.assertEqual(model_payload["members"], list(request.members))
+        self.assertNotIn("traffic", json.dumps(model_payload).lower())
+        self.assertNotIn("chain-of-thought", json.dumps(model_payload).lower())
+
+    def test_schema_parse_failure_is_returned_for_deterministic_validation(self) -> None:
+        raw_message = type("RawMessage", (), {"content": "not valid JSON"})()
+        chat_model = _FakeChatModel(
+            {
+                "raw": raw_message,
+                "parsed": None,
+                "parsing_error": ValueError("invalid schema"),
+            }
+        )
+        adapter = LangChainGroqAdjudicationAdapter(
+            model="fixture/model", chat_model=chat_model
+        )
+
+        output = adapter.invoke(
+            AdjudicationRequest(
+                role="critic",
+                prompt="critic prompt",
+                members=(),
+            )
+        )
+
+        self.assertEqual(output, "not valid JSON")
+
+
+if __name__ == "__main__":
+    unittest.main()
