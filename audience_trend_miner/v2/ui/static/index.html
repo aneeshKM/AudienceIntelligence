@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AudienceIntelligence</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="wordmark" href="#setup" aria-label="AudienceIntelligence home">
+        <span class="wordmark-mark" aria-hidden="true">AI</span>
+        <span>AudienceIntelligence</span>
+      </a>
+      <p>Country-level attention signals, shaped into commercially useful audiences.</p>
+    </header>
+
+    <main class="page-shell">
+      <section class="hero" id="setup" aria-labelledby="page-title">
+        <p class="eyebrow">Audience Trend Miner · V2</p>
+        <h1 id="page-title">From public attention<br>to an audience portfolio.</h1>
+        <p class="hero-copy">
+          Choose a stable run identifier and an As-of Date. This page will stay
+          with the run from evidence collection through final results.
+        </p>
+
+        <form id="run-form" class="run-form">
+          <div class="field">
+            <label for="run-id">Run ID</label>
+            <span class="field-hint" id="run-id-hint">Reuse an ID to retry or resume.</span>
+            <input
+              id="run-id"
+              name="run_id"
+              pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+              aria-describedby="run-id-hint"
+              autocomplete="off"
+              required
+            >
+          </div>
+          <div class="field">
+            <label for="as-of">As-of Date</label>
+            <span class="field-hint" id="as-of-hint">Anchors both seven-day windows.</span>
+            <input id="as-of" name="as_of" type="date" aria-describedby="as-of-hint" required>
+          </div>
+          <button id="start-run" class="primary-action" type="submit">
+            <span>Start or resume run</span>
+            <span aria-hidden="true">→</span>
+          </button>
+        </form>
+        <p id="run-status" class="run-status" role="status" aria-live="polite" aria-atomic="true">
+          Ready to run.
+        </p>
+      </section>
+
+      <section id="progress" class="progress-section" aria-labelledby="progress-title" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Live execution</p>
+            <h2 id="progress-title">Run progress</h2>
+          </div>
+          <button id="follow-progress" class="quiet-action" type="button" hidden>
+            Follow new progress ↓
+          </button>
+        </div>
+        <div id="progress-feed" class="progress-feed" aria-label="Pipeline progress by module"></div>
+      </section>
+
+      <section id="portfolio" class="portfolio-section" aria-labelledby="portfolio-title" hidden>
+        <div class="section-heading portfolio-heading">
+          <div>
+            <p class="eyebrow">Published result</p>
+            <h2 id="portfolio-title">Audience Portfolio</h2>
+          </div>
+          <p id="portfolio-dates" class="portfolio-dates"></p>
+        </div>
+
+        <p id="empty-portfolio" class="empty-state" hidden>
+          No robust audience trends qualified for this run.
+        </p>
+
+        <section id="growing-audiences" class="direction-group" aria-labelledby="growing-title" hidden>
+          <h3 id="growing-title"><span aria-hidden="true">↗</span> Growing audiences</h3>
+          <div class="card-grid"></div>
+        </section>
+
+        <section id="shrinking-audiences" class="direction-group" aria-labelledby="shrinking-title" hidden>
+          <h3 id="shrinking-title"><span aria-hidden="true">↘</span> Shrinking audiences</h3>
+          <div class="card-grid"></div>
+        </section>
+
+        <aside class="limitation" aria-labelledby="limitation-title">
+          <p class="eyebrow" id="limitation-title">Evidence limitation</p>
+          <p>Wikipedia attention does not prove reader identity, intent, income, causation, or future behavior.</p>
+        </aside>
+      </section>
+    </main>
+
+    <template id="module-template">
+      <section class="module-panel">
+        <div class="module-heading">
+          <h3></h3>
+          <span class="module-count"></span>
+        </div>
+        <ol class="event-list"></ol>
+      </section>
+    </template>
+
+    <template id="event-template">
+      <li class="event-item">
+        <div class="event-marker" aria-hidden="true"></div>
+        <div class="event-body">
+          <div class="event-meta">
+            <span class="event-level"></span>
+            <span class="event-operation"></span>
+            <time></time>
+          </div>
+          <p class="event-message"></p>
+          <div class="event-progress" hidden>
+            <progress></progress>
+            <span></span>
+          </div>
+        </div>
+      </li>
+    </template>
+
+    <template id="audience-card-template">
+      <article class="audience-card">
+        <div class="card-topline">
+          <span class="direction-badge"></span>
+          <span class="percentage-change"></span>
+        </div>
+        <h4></h4>
+        <p class="trend-summary"></p>
+        <dl class="coverage-list">
+          <div><dt>Previous coverage</dt><dd class="previous-coverage"></dd></div>
+          <div><dt>Current coverage</dt><dd class="current-coverage"></dd></div>
+        </dl>
+        <div class="card-section">
+          <h5>Commercial interpretation</h5>
+          <p class="commercial-interpretation"></p>
+        </div>
+        <div class="card-section buying-power">
+          <h5>Buying power · <span class="buying-power-rating"></span></h5>
+          <p class="buying-power-rationale"></p>
+        </div>
+      </article>
+    </template>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

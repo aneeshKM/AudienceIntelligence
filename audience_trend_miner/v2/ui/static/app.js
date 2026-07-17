@@ -1,0 +1,332 @@
+"use strict";
+
+const form = document.querySelector("#run-form");
+const runIdInput = document.querySelector("#run-id");
+const asOfInput = document.querySelector("#as-of");
+const startButton = document.querySelector("#start-run");
+const runStatus = document.querySelector("#run-status");
+const progressSection = document.querySelector("#progress");
+const progressFeed = document.querySelector("#progress-feed");
+const followButton = document.querySelector("#follow-progress");
+const portfolioSection = document.querySelector("#portfolio");
+const portfolioDates = document.querySelector("#portfolio-dates");
+const emptyPortfolio = document.querySelector("#empty-portfolio");
+const moduleTemplate = document.querySelector("#module-template");
+const eventTemplate = document.querySelector("#event-template");
+const cardTemplate = document.querySelector("#audience-card-template");
+
+let activeRunId = null;
+let lastSequence = 0;
+let socket = null;
+let streamWanted = false;
+let followProgress = true;
+let lastScrollY = window.scrollY;
+let pollGeneration = 0;
+const modulePanels = new Map();
+
+const localToday = new Date();
+localToday.setMinutes(localToday.getMinutes() - localToday.getTimezoneOffset());
+asOfInput.value = localToday.toISOString().slice(0, 10);
+runIdInput.value = `run-${asOfInput.value}`;
+
+asOfInput.addEventListener("change", () => {
+  if (!activeRunId || runIdInput.value === `run-${activeRunId.asOf}`) {
+    runIdInput.value = `run-${asOfInput.value}`;
+  }
+});
+
+window.addEventListener(
+  "scroll",
+  () => {
+    const distanceFromBottom =
+      document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+    if (distanceFromBottom < 80) {
+      setFollowing(true);
+    } else if (window.scrollY < lastScrollY - 4) {
+      setFollowing(false);
+    }
+    lastScrollY = window.scrollY;
+  },
+  { passive: true },
+);
+
+followButton.addEventListener("click", () => {
+  setFollowing(true);
+  scrollToLatest();
+});
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!form.reportValidity()) return;
+
+  const runId = runIdInput.value;
+  const asOf = asOfInput.value;
+  const isNewRun = activeRunId?.id !== runId;
+  beginRun(runId, asOf, isNewRun);
+
+  try {
+    const response = await fetch("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: runId, as_of: asOf }),
+    });
+    if (!response.ok && response.status !== 409) {
+      throw new Error(await responseDetail(response));
+    }
+    setStatus(
+      response.status === 409
+        ? `Reconnected to ${runId}. Live progress is continuing.`
+        : `${runId} started. Following live progress.`,
+    );
+    connectEventStream(runId);
+    pollRun(runId, ++pollGeneration);
+  } catch (error) {
+    stopStreaming();
+    finishControls(true);
+    setStatus(error.message || "The run could not be started.", true);
+  }
+});
+
+function beginRun(runId, asOf, clearExisting) {
+  stopStreaming();
+  pollGeneration += 1;
+  activeRunId = { id: runId, asOf };
+  if (clearExisting) {
+    lastSequence = 0;
+    progressFeed.replaceChildren();
+    modulePanels.clear();
+  }
+  portfolioSection.hidden = true;
+  progressSection.hidden = false;
+  startButton.disabled = true;
+  startButton.querySelector("span").textContent = "Run in progress";
+  setStatus(`Starting ${runId}…`);
+  setFollowing(true);
+}
+
+function finishControls(retry) {
+  startButton.disabled = false;
+  startButton.querySelector("span").textContent = retry
+    ? "Retry or resume run"
+    : "Start or resume run";
+}
+
+function setStatus(message, isError = false) {
+  runStatus.textContent = message;
+  runStatus.classList.toggle("error", isError);
+}
+
+async function responseDetail(response) {
+  try {
+    const body = await response.json();
+    if (typeof body.detail === "string") return body.detail;
+  } catch (_) {
+    // The public fallback below deliberately avoids surfacing response internals.
+  }
+  return "The run request was unsuccessful.";
+}
+
+function connectEventStream(runId) {
+  streamWanted = true;
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  socket = new WebSocket(
+    `${protocol}://${window.location.host}/api/runs/${encodeURIComponent(runId)}/events?after_sequence=${lastSequence}`,
+  );
+  socket.addEventListener("message", (message) => {
+    const event = JSON.parse(message.data);
+    lastSequence = Math.max(lastSequence, event.sequence);
+    appendProgressEvent(event);
+  });
+  socket.addEventListener("close", () => {
+    socket = null;
+    if (streamWanted && activeRunId?.id === runId) {
+      window.setTimeout(() => connectEventStream(runId), 700);
+    }
+  });
+}
+
+function stopStreaming() {
+  streamWanted = false;
+  if (socket) {
+    socket.close();
+    socket = null;
+  }
+}
+
+async function pollRun(runId, generation) {
+  while (activeRunId?.id === runId && generation === pollGeneration) {
+    try {
+      const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
+      if (!response.ok) throw new Error("Run status is temporarily unavailable.");
+      const state = await response.json();
+      if (state.status === "succeeded") {
+        stopStreaming();
+        setStatus(`${runId} completed. Audience Portfolio is ready.`);
+        finishControls(false);
+        await loadPortfolio(runId);
+        return;
+      }
+      if (state.status === "failed") {
+        stopStreaming();
+        const message = state.failure?.message || "The run ended unsuccessfully.";
+        setStatus(`${runId} failed. ${message} Progress is retained for retry.`, true);
+        finishControls(true);
+        return;
+      }
+    } catch (error) {
+      setStatus(error.message || "Run status is temporarily unavailable.", true);
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+  }
+}
+
+function appendProgressEvent(event) {
+  const panel = modulePanel(event.module);
+  const item = eventTemplate.content.firstElementChild.cloneNode(true);
+  const level = event.level === "warning" || event.level === "error" ? event.level : "info";
+  const levelLabels = { info: "Update", warning: "Warning", error: "Error" };
+  item.classList.add(level);
+  item.querySelector(".event-level").textContent = levelLabels[level];
+  item.querySelector(".event-operation").textContent = humanize(event.operation);
+  item.querySelector(".event-message").textContent = event.message;
+
+  const time = item.querySelector("time");
+  time.dateTime = event.timestamp;
+  const parsedTime = new Date(event.timestamp);
+  time.textContent = Number.isNaN(parsedTime.valueOf())
+    ? "Time unavailable"
+    : parsedTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  if (event.progress) {
+    const progress = item.querySelector(".event-progress");
+    const meter = progress.querySelector("progress");
+    progress.hidden = false;
+    meter.max = event.progress.total;
+    meter.value = event.progress.current;
+    meter.setAttribute(
+      "aria-label",
+      `${humanize(event.operation)}: ${event.progress.current} of ${event.progress.total}`,
+    );
+    progress.querySelector("span").textContent =
+      event.progress.current === event.progress.total
+        ? `${event.progress.current} of ${event.progress.total} · Complete`
+        : `${event.progress.current} of ${event.progress.total}`;
+  }
+
+  panel.list.append(item);
+  panel.count += 1;
+  panel.element.querySelector(".module-count").textContent =
+    `${panel.count} ${panel.count === 1 ? "event" : "events"}`;
+  setStatus(`${humanize(event.module)}: ${levelLabels[level]} — ${event.message}`, level === "error");
+  if (followProgress) window.requestAnimationFrame(scrollToLatest);
+}
+
+function modulePanel(module) {
+  if (modulePanels.has(module)) return modulePanels.get(module);
+  const element = moduleTemplate.content.firstElementChild.cloneNode(true);
+  element.querySelector("h3").textContent = humanize(module);
+  progressFeed.append(element);
+  const panel = { element, list: element.querySelector(".event-list"), count: 0 };
+  modulePanels.set(module, panel);
+  return panel;
+}
+
+function humanize(value) {
+  return String(value).replaceAll("-", " ");
+}
+
+function setFollowing(value) {
+  followProgress = value;
+  followButton.hidden = value;
+}
+
+function scrollToLatest() {
+  const latest = progressFeed.lastElementChild;
+  if (latest) latest.scrollIntoView({ block: "end" });
+}
+
+async function loadPortfolio(runId) {
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/portfolio`);
+    if (!response.ok) throw new Error(await responseDetail(response));
+    renderPortfolio(await response.json());
+  } catch (error) {
+    setStatus(error.message || "The completed portfolio could not be loaded.", true);
+  }
+}
+
+function renderPortfolio(portfolio) {
+  const previous = portfolio.nominal_windows.previous;
+  const current = portfolio.nominal_windows.current;
+  portfolioDates.textContent =
+    `As of ${formatDate(portfolio.as_of_date)} · ` +
+    `Previous ${formatDate(previous.start)}–${formatDate(previous.end)} · ` +
+    `Current ${formatDate(current.start)}–${formatDate(current.end)}`;
+
+  const growing = portfolio.audience_portfolio.filter(
+    (audience) => audience.direction === "robust_growth",
+  );
+  const shrinking = portfolio.audience_portfolio.filter(
+    (audience) => audience.direction === "robust_shrinking",
+  );
+  renderDirection("#growing-audiences", growing, "Growing", "↗");
+  renderDirection("#shrinking-audiences", shrinking, "Shrinking", "↘");
+  emptyPortfolio.hidden = portfolio.audience_portfolio.length !== 0;
+  portfolioSection.hidden = false;
+  portfolioSection.scrollIntoView({ block: "start" });
+}
+
+function renderDirection(selector, audiences, label, icon) {
+  const section = document.querySelector(selector);
+  const grid = section.querySelector(".card-grid");
+  grid.replaceChildren();
+  section.hidden = audiences.length === 0;
+  for (const audience of audiences) {
+    const card = cardTemplate.content.firstElementChild.cloneNode(true);
+    card.classList.add(label.toLowerCase());
+    card.querySelector(".direction-badge").textContent = `${icon} ${label}`;
+    card.querySelector(".percentage-change").textContent = formatChange(
+      audience.percentage_change,
+    );
+    card.querySelector("h4").textContent = audience.narrative.name;
+    card.querySelector(".trend-summary").textContent = audience.narrative.summary;
+    card.querySelector(".previous-coverage").textContent = formatCoverage(
+      audience.coverage.previous,
+    );
+    card.querySelector(".current-coverage").textContent = formatCoverage(
+      audience.coverage.current,
+    );
+    card.querySelector(".commercial-interpretation").textContent =
+      audience.narrative.commercial_interpretation;
+    card.querySelector(".buying-power-rating").textContent = humanize(
+      audience.narrative.buying_power_rating,
+    );
+    card.querySelector(".buying-power-rationale").textContent =
+      audience.narrative.buying_power_rationale;
+    grid.append(card);
+  }
+}
+
+function formatChange(value) {
+  if (value === null) return "Change not available";
+  return `${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 1,
+    signDisplay: "always",
+  }).format(value)}% change`;
+}
+
+function formatCoverage(value) {
+  return new Intl.NumberFormat(undefined, {
+    style: "percent",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatDate(value) {
+  const parsed = new Date(`${value}T00:00:00`);
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(parsed);
+}

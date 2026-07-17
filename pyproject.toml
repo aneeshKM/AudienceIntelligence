@@ -29,4 +29,4 @@ audience-trend-miner = "audience_trend_miner.__main__:main"
 include = ["audience_trend_miner*"]
 
 [tool.setuptools.package-data]
-audience_trend_miner = ["schemas/*.json", "v2/**/*.json"]
+audience_trend_miner = ["schemas/*.json", "v2/**/*.json", "v2/ui/static/*"]

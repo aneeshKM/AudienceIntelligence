@@ -24,21 +24,30 @@ def _wait_for_terminal(client: TestClient, run_id: str) -> dict[str, object]:
     raise AssertionError("run did not reach a terminal state")
 
 
-def _write_completed_publication(root: Path, run_id: str) -> None:
+def _write_completed_publication(
+    root: Path,
+    run_id: str,
+    *,
+    audiences: list[dict[str, object]] | None = None,
+) -> None:
     publication = root / run_id / "publication"
     publication.mkdir(parents=True)
     windows = {
         "previous": {"start": "2026-07-03", "end": "2026-07-09"},
         "current": {"start": "2026-07-10", "end": "2026-07-16"},
     }
+    audience_portfolio = audiences or []
     products = {
         "portfolio.json": {
             "schema_version": "1.0",
             "run_id": run_id,
             "as_of_date": "2026-07-17",
             "nominal_windows": windows,
-            "audience_portfolio": [],
-            "completion": {"status": "complete", "empty": True},
+            "audience_portfolio": audience_portfolio,
+            "completion": {
+                "status": "complete",
+                "empty": not audience_portfolio,
+            },
         },
         "audit.json": {
             "schema_version": "1.0",
@@ -102,6 +111,87 @@ def _write_completed_publication(root: Path, run_id: str) -> None:
 
 
 class RunServerTest(unittest.TestCase):
+    def test_primary_page_exposes_one_semantic_installer_interface(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_app(output_root=Path(temporary_directory) / "runs")
+
+            with TestClient(app) as client:
+                response = client.get("/")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.headers["content-type"].startswith("text/html"))
+            self.assertIn("<main", response.text)
+            self.assertIn('id="run-form"', response.text)
+            self.assertIn('id="run-status"', response.text)
+            self.assertIn('aria-live="polite"', response.text)
+            self.assertIn('src="/assets/app.js"', response.text)
+
+    def test_primary_page_contains_accessible_progress_and_portfolio_regions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app = create_app(output_root=Path(temporary_directory) / "runs")
+
+            with TestClient(app) as client:
+                response = client.get("/")
+
+            self.assertIn('id="progress-feed"', response.text)
+            self.assertIn('id="follow-progress"', response.text)
+            self.assertIn('id="portfolio"', response.text)
+            self.assertIn('id="growing-audiences"', response.text)
+            self.assertIn('id="shrinking-audiences"', response.text)
+            self.assertIn(
+                "No robust audience trends qualified for this run.", response.text
+            )
+            self.assertIn(
+                "Wikipedia attention does not prove reader identity, intent, income, "
+                "causation, or future behavior.",
+                response.text,
+            )
+
+    def test_completed_run_exposes_only_the_validated_portfolio_contract(self) -> None:
+        audience = {
+            "cluster_id": "cluster-clean-air",
+            "source_preliminary_cluster_id": "preliminary-clean-air",
+            "direction": "robust_growth",
+            "traffic": {
+                window: {
+                    "observed_total": total,
+                    "observed_page_days": 14,
+                    "successful_days": 7,
+                    "conservative_observed_minimum": total,
+                    "conservative_observed_maximum": total + 100,
+                    "seven_day_equivalent": float(total),
+                    "minimum": float(total),
+                    "maximum": float(total + 100),
+                }
+                for window, total in (("previous", 100_000), ("current", 125_000))
+            },
+            "percentage_change": 25.0,
+            "coverage": {"previous": 1.0, "current": 0.86},
+            "confidence": "robust",
+            "impact_score": 3.5,
+            "narrative": {
+                "name": "Clean-air households",
+                "summary": "Attention expanded across practical air-quality topics.",
+                "commercial_interpretation": "Home-health planning is becoming salient.",
+                "brand_categories": ["Air purifiers"],
+                "buying_power_rating": "medium",
+                "buying_power_rationale": "Considered purchases span several price points.",
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "runs"
+            _write_completed_publication(root, "portfolio-run", audiences=[audience])
+            app = create_app(output_root=root)
+
+            with TestClient(app) as client:
+                response = client.get("/api/runs/portfolio-run/portfolio")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["audience_portfolio"], [audience])
+            self.assertNotIn("stage_evidence", response.text)
+
     def test_flushed_cli_events_are_forwarded_live_before_process_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

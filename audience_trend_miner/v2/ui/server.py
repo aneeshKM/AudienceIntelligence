@@ -18,7 +18,9 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from starlette.staticfiles import StaticFiles
 
 from audience_trend_miner.v2.run_publication import validate_completed_publication
 from audience_trend_miner.v2.shared import BoundedProgress, ProgressEvent, V2ContractError
@@ -27,6 +29,7 @@ from audience_trend_miner.v2.shared import BoundedProgress, ProgressEvent, V2Con
 DEFAULT_HOST = "127.0.0.1"
 RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 EVENT_HISTORY_NAME = "ui-events.jsonl"
+STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 
 class StartRunRequest(BaseModel):
@@ -379,6 +382,11 @@ def create_app(
     """Create the loopback application's process-control API."""
     supervisor = _RunSupervisor(output_root.resolve(), cli_command)
     app = FastAPI(title="AudienceIntelligence V2")
+    app.mount("/assets", StaticFiles(directory=STATIC_DIRECTORY), name="assets")
+
+    @app.get("/", response_class=FileResponse)
+    def index() -> FileResponse:
+        return FileResponse(STATIC_DIRECTORY / "index.html")
 
     @app.post("/api/runs", status_code=status.HTTP_202_ACCEPTED)
     def start_run(request: StartRunRequest) -> dict[str, object]:
@@ -389,6 +397,23 @@ def create_app(
         run_id: Annotated[str, ApiPath(pattern=RUN_ID_PATTERN)],
     ) -> dict[str, object]:
         return supervisor.get(run_id)
+
+    @app.get("/api/runs/{run_id}/portfolio", response_class=JSONResponse)
+    def get_portfolio(
+        run_id: Annotated[str, ApiPath(pattern=RUN_ID_PATTERN)],
+    ) -> JSONResponse:
+        publication_directory = output_root.resolve() / run_id / "publication"
+        try:
+            validate_completed_publication(publication_directory, run_id=run_id)
+            portfolio = json.loads(
+                (publication_directory / "portfolio.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError, V2ContractError) as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="A completed Audience Portfolio was not found.",
+            ) from error
+        return JSONResponse(portfolio)
 
     @app.websocket("/api/runs/{run_id}/events")
     async def stream_run_events(
