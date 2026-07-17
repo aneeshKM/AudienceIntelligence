@@ -380,6 +380,97 @@ class RunPublicationStageTest(unittest.TestCase):
             events = [json.loads(line) for line in resumed.stdout.splitlines()]
             self.assertEqual([event["operation"] for event in events], ["resume"])
 
+    def test_resume_rejects_stale_publication_for_changed_compatible_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _publish_completed_upstream(root)
+            first = _run_publication(root)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            run_directory = root / "publication-run"
+            publication = run_directory / "publication"
+            before = {path.name: path.read_bytes() for path in publication.iterdir()}
+            trend_path = run_directory / "trend-portfolio.json"
+            trend = json.loads(trend_path.read_text(encoding="utf-8"))
+            trend["payload"]["audience_portfolio"][0]["narrative"][
+                "name"
+            ] = "Changed but schema-valid"
+            trend_path.write_text(json.dumps(trend), encoding="utf-8")
+
+            resumed = _run_publication(root)
+
+            self.assertNotEqual(resumed.returncode, 0)
+            self.assertIn("collides with requested run", resumed.stderr)
+            self.assertEqual(
+                {path.name: path.read_bytes() for path in publication.iterdir()}, before
+            )
+
+    def test_resume_rejects_hash_valid_but_internally_changed_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _publish_completed_upstream(root)
+            first = _run_publication(root)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            publication = root / "publication-run" / "publication"
+            portfolio_path = publication / "portfolio.json"
+            portfolio = json.loads(portfolio_path.read_text(encoding="utf-8"))
+            portfolio["audience_portfolio"][0]["narrative"]["name"] = "Tampered"
+            portfolio_path.write_text(
+                json.dumps(portfolio, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            content = portfolio_path.read_bytes()
+            manifest_path = publication / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["published_artifacts"]["portfolio.json"].update(
+                {
+                    "sha256": f"sha256:{hashlib.sha256(content).hexdigest()}",
+                    "bytes": len(content),
+                }
+            )
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            resumed = _run_publication(root)
+
+            self.assertNotEqual(resumed.returncode, 0)
+            self.assertIn("collides with requested run", resumed.stderr)
+
+    def test_rejects_duplicate_or_mismatched_internal_provenance(self) -> None:
+        scenarios = ("adjudication-ids", "duplicate-traffic")
+        for scenario in scenarios:
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                _publish_completed_upstream(root)
+                run_directory = root / "publication-run"
+                trend_path = run_directory / "trend-portfolio.json"
+                trend = json.loads(trend_path.read_text(encoding="utf-8"))
+                if scenario == "adjudication-ids":
+                    adjudication_path = run_directory / "cluster-adjudication.json"
+                    adjudication = json.loads(
+                        adjudication_path.read_text(encoding="utf-8")
+                    )
+                    adjudication["payload"]["adjudications"][1][
+                        "preliminary_cluster_id"
+                    ] = "preliminary-cluster-0001"
+                    adjudication_path.write_text(
+                        json.dumps(adjudication), encoding="utf-8"
+                    )
+                    trend["payload"]["configuration"][
+                        "cluster_adjudication_fingerprint"
+                    ] = canonical_json_fingerprint(adjudication)
+                else:
+                    traffic = trend["payload"]["audit_cluster_traffic"]
+                    traffic.append(traffic[0])
+                trend_path.write_text(json.dumps(trend), encoding="utf-8")
+
+                completed = _run_publication(root)
+
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn("inconsistent", completed.stderr)
+                self.assertFalse((run_directory / "publication").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

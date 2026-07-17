@@ -88,8 +88,8 @@ def execute_run_publication(
     _validate_upstream(artifacts)
     _ensure_safe(artifacts)
 
-    if publication_directory.exists():
-        _validate_existing_publication(publication_directory, run_id)
+    if os.path.lexists(publication_directory):
+        _validate_existing_publication(publication_directory, run_id, artifacts)
         _emit(
             progress_sink,
             run_id,
@@ -115,6 +115,11 @@ def execute_run_publication(
     staging_directory = Path(
         tempfile.mkdtemp(prefix=".publication.", dir=run_directory)
     )
+    completed_directory = staging_directory.with_name(
+        f"{staging_directory.name}.complete"
+    )
+    completed_owned = False
+    published = False
     try:
         products = {"portfolio.json": portfolio, "audit.json": audit}
         for index, (name, product) in enumerate(products.items(), start=1):
@@ -128,7 +133,7 @@ def execute_run_publication(
         atomic_write_json(staging_directory / "manifest.json", manifest)
         if fail_after_artifact == 3:
             raise V2ContractError("publication write failed")
-        _validate_staged_publication(staging_directory, run_id)
+        _validate_staged_publication(staging_directory, run_id, artifacts)
         _emit(
             progress_sink,
             run_id,
@@ -140,13 +145,22 @@ def execute_run_publication(
         )
         if interrupt_before_completion:
             raise V2ContractError("publication interrupted before completion")
+        os.rename(staging_directory, completed_directory)
+        completed_owned = True
         try:
-            os.rename(staging_directory, publication_directory)
+            os.symlink(
+                completed_directory.name,
+                publication_directory,
+                target_is_directory=True,
+            )
         except OSError as error:
             raise V2ContractError("publication collision prevented completion") from error
+        published = True
         _sync_directory(run_directory)
     finally:
         _remove_staging_directory(staging_directory)
+        if completed_owned and not published:
+            _remove_staging_directory(completed_directory)
 
     _emit(
         progress_sink,
@@ -227,12 +241,18 @@ def _validate_counts_and_membership(
     accepted_pages = sum(
         len(_list_of_mappings(cluster["members"])) for cluster in final_clusters
     )
+    expected_preliminary_ids = [
+        f"preliminary-cluster-{index:04d}"
+        for index in range(1, len(preliminary) + 1)
+    ]
     if adjudication_counts != {
         "preliminary_clusters": len(preliminary),
         "final_audience_clusters": len(final_clusters),
         "accepted_pages": accepted_pages,
         "rejected_pages": len(rejected),
-    } or len(adjudications) != len(preliminary):
+    } or [
+        record["preliminary_cluster_id"] for record in adjudications
+    ] != expected_preliminary_ids:
         raise V2ContractError("Cluster Adjudication counts are inconsistent")
 
     portfolio = _list_of_mappings(trend["audience_portfolio"])
@@ -243,10 +263,12 @@ def _validate_counts_and_membership(
         raise V2ContractError("Trend Portfolio counts are inconsistent")
     final_by_id = {cluster["cluster_id"]: cluster for cluster in final_clusters}
     portfolio_ids = [item["cluster_id"] for item in portfolio]
+    traffic_ids = [record["cluster_id"] for record in traffic]
     if (
         len(portfolio_ids) != len(set(portfolio_ids))
         or [record["cluster_id"] for record in narratives] != portfolio_ids
-        or {record["cluster_id"] for record in traffic} != set(final_by_id)
+        or len(traffic_ids) != len(set(traffic_ids))
+        or set(traffic_ids) != set(final_by_id)
     ):
         raise V2ContractError("Trend Portfolio membership is inconsistent")
     for item in portfolio:
@@ -318,14 +340,7 @@ def _manifest(
                 for stage in UPSTREAM_STAGES[1:]
             },
         },
-        "modules": {
-            stage: {
-                "status": "complete",
-                "artifact_schema_version": artifact["schema_version"],
-                "sha256": canonical_json_fingerprint(artifact),
-            }
-            for stage, artifact in artifacts.items()
-        },
+        "modules": _module_integrity(artifacts),
         "schemas": {name: "1.0" for name in FINAL_SCHEMAS},
         "published_artifacts": {
             name: {
@@ -344,16 +359,24 @@ def _manifest(
     }
 
 
-def _validate_existing_publication(directory: Path, run_id: str) -> None:
+def _validate_existing_publication(
+    directory: Path,
+    run_id: str,
+    artifacts: dict[str, dict[str, object]],
+) -> None:
     try:
-        _validate_staged_publication(directory, run_id)
+        _validate_staged_publication(directory, run_id, artifacts)
     except (OSError, json.JSONDecodeError, jsonschema.ValidationError, V2ContractError) as error:
         raise V2ContractError(
             "existing publication collides with requested run"
         ) from error
 
 
-def _validate_staged_publication(directory: Path, run_id: str) -> None:
+def _validate_staged_publication(
+    directory: Path,
+    run_id: str,
+    artifacts: dict[str, dict[str, object]],
+) -> None:
     if not directory.is_dir() or {path.name for path in directory.iterdir()} != set(
         FINAL_SCHEMAS
     ):
@@ -366,7 +389,15 @@ def _validate_staged_publication(directory: Path, run_id: str) -> None:
             raise V2ContractError("published artifact belongs to different run facts")
         products[name] = loaded
     _ensure_safe(products)
+    expected_portfolio, expected_audit = _assemble_products(run_id, artifacts)
+    if (
+        products["portfolio.json"] != expected_portfolio
+        or products["audit.json"] != expected_audit
+    ):
+        raise V2ContractError("published artifacts are internally inconsistent")
     manifest = products["manifest.json"]
+    if manifest["modules"] != _module_integrity(artifacts):
+        raise V2ContractError("publication provenance does not match upstream artifacts")
     published = _mapping(manifest["published_artifacts"])
     for name in ("portfolio.json", "audit.json"):
         record = _mapping(published[name])
@@ -375,6 +406,19 @@ def _validate_staged_publication(directory: Path, run_id: str) -> None:
             or record["bytes"] != (directory / name).stat().st_size
         ):
             raise V2ContractError("published artifact integrity check failed")
+
+
+def _module_integrity(
+    artifacts: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    return {
+        stage: {
+            "status": "complete",
+            "artifact_schema_version": artifact["schema_version"],
+            "sha256": canonical_json_fingerprint(artifact),
+        }
+        for stage, artifact in artifacts.items()
+    }
 
 
 def _semantic_evidence_fingerprint(artifact: dict[str, object]) -> str:
