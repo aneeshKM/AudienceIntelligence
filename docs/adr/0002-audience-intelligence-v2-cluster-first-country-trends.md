@@ -24,8 +24,8 @@ Build V2 as a separate cluster-first pipeline:
 
 1. Request 14 days of `top-per-country/US` Analytics data.
 2. Keep only `en.wikipedia` records and union both windows.
-3. Resolve canonical content metadata with the best official MediaWiki request
-   pattern selected by live implementation-phase testing.
+3. Resolve canonical content metadata with the batched Action API request and
+   continuation contract selected by the [live MediaWiki source comparison](../research/mediawiki-source-contract.md).
 4. Represent each page with title/lead and cleaned categories.
 5. Combine content and category cosine similarity with `70/30` weights.
 6. Form preliminary connected components at an empirically selected threshold.
