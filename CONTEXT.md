@@ -1,78 +1,174 @@
-# Audience Trend Miner domain language
+# AudienceIntelligence V2 domain language
 
-## Candidate Universe
+This glossary defines the intended V2 design. The implemented V1 behavior is
+documented separately in `research/audience-trend-miner.md` and ADR-0001.
 
-The complete union of raw English Wikipedia titles returned by the daily top-page discovery responses for every day in the current analysis window. It is complete only when all seven discovery days succeed within the retry allowance.
+## Nominal Window
 
-## Canonical Article
+One of two adjacent seven-day calendar periods ending two days before the run's
+`as-of` date. A Nominal Window may contain fewer successful Analytics days.
 
-One resolved English Wikipedia page, identified by `page_id`, with its canonical title, lead extract, categories, and aggregated Alias Traffic. Exactly one Canonical Article is emitted for each successfully resolved `page_id`.
+## Effective Window
 
-## Alias Traffic
+The successful daily Analytics observations inside a Nominal Window. An
+Effective Window is usable only when it contains at least four days. Its traffic
+is normalized to a seven-day equivalent for comparison with the other window.
 
-The dated Pageviews observations and derived previous/current window totals belonging to one raw candidate title. Multiple aliases may contribute Alias Traffic to the same Canonical Article.
+## Analytics Page Observation
 
-## Wikimedia Attention Acquisition
+One published `views_ceil` record returned by the United States
+`top-per-country` endpoint. Its identity is the pair `(project, article)`. An
+absent record means not observed in the daily top 1,000, not known zero traffic.
 
-The operation that builds a Candidate Universe, retrieves exact Alias Traffic and Wikipedia metadata, resolves Canonical Articles, aggregates aliases, and returns traceable raw evidence and structured failures. It does not publish run artifacts.
+## V2 Candidate Universe
 
-## Effective Run Configuration
+The union of titles from every successful day in both Effective Windows after
+filtering to `project == "en.wikipedia"`. Unlike V1, V2 does not discover from
+the current window alone.
 
-The immutable, non-secret facts resolved exactly once when a run starts. Shell
-values take precedence over `.env` values, which take precedence over global
-defaults. A normal run requires live LLM credentials; explicit test and CI runs
-may select fixture adapters. Run artifacts record safe provenance such as model
-name and adapter modes, never credentials, local paths, or secret-source details.
+## Canonical Page
 
-## Wikimedia Evidence Fetching
+One English Wikipedia page identified by stable page ID and canonical title,
+with a cleaned lead of at most 600 characters and at most five selected visible
+categories. Redirect aliases resolving to the same page ID form one Canonical
+Page.
 
-The resumable operation that completes discovery and retrieves raw Pageviews and
-metadata evidence without forming Alias Traffic or Canonical Articles. It returns
-only after the complete Candidate Universe has terminal Pageviews and metadata
-evidence, projected as an immutable typed value. Fetch jobs are run-scoped,
-idempotent, and leased through PostgreSQL. Raw Wikimedia evidence and terminal
-failures are persisted so work can resume after interruption.
+## Selected Category
 
-## Wikimedia Attention Transformation
+A visible Wikipedia category remaining after deterministic noise removal and
+ranking by inverse document frequency across the V2 Candidate Universe. A
+Canonical Page retains at most five Selected Categories.
 
-The synchronous, deterministic operation that consumes the immutable terminal
-evidence projected from persisted Wikimedia evidence, derives Alias Traffic, and
-forms Canonical Articles. It has no database or worker dependency and is safely
-replayed after interruption. Canonical Article formation receives every alias in
-the complete Candidate Universe after fetching has completed or permanently
-failed.
+## Content Representation
 
-## Evidence Job
+The local embedding of a Canonical Page's title and cleaned lead.
 
-One PostgreSQL-backed, run-scoped item of Wikimedia fetching work: discovery,
-Pageviews, or metadata. An Evidence Job is claimed with an expiring lease, has a
-bounded attempt history, and is uniquely identified within its run so resumed
-workers cannot duplicate completed work. Deterministic Wikimedia Attention
-Transformation does not create Evidence Jobs.
+## Category Representation
 
-## Qualified Signal
+The local embedding of a Canonical Page's Selected Category values.
 
-A Canonical Article whose aggregated current-window traffic is at least 100,000, exceeds its previous-window traffic, has a positive capped scale-and-acceleration score, and is not explicit deterministic noise. A Qualified Signal is an input to later audience formation; it is not itself an accepted audience.
+## Combined Similarity
 
-## Classified Signal
+The weighted pair relationship used for preliminary clustering:
 
-A Qualified Signal retained by a strict article-level model judgment because it
-supports a commercially meaningful, brand-safe consumer audience. Invalid,
-partial, or unavailable judgments fail closed after three total attempts. Every
-attempt remains traceable even when the signal is rejected.
+```text
+0.70 * cosine(Content Representation)
++ 0.30 * cosine(Category Representation)
+```
 
-## Deterministic Noise
+The qualifying threshold is configuration selected from a live V2 experiment.
 
-An unmistakable technical or navigational Wikipedia target: Main Page or a page in an explicitly enumerated technical namespace. List and index articles are not Deterministic Noise merely because of their title form.
+## Preliminary Cluster
 
-## Run Publication
+A multi-page connected component in the graph of Canonical Pages whose Combined
+Similarity meets the configured threshold. Singleton components are discarded
+and not persisted. A token-oversized component is subdivided locally before LLM
+review.
 
-The atomic operation that accepts finished domain results and effective run facts, assembles and validates the complete artifact bundle, renders the report, stages all files, and exposes the timestamped run directory only after every artifact is complete. Domain degradation is publishable; publication failure leaves no completed run directory.
+## LLM Cluster Selection
 
-## Accepted Refined Audience
+The semantic-cohesion ordering of reviewable Preliminary Clusters before agent
+adjudication. Cohesion is mean Combined Similarity across every page pair, with
+larger page count and stable page IDs as deterministic tie-breakers.
+`AUDIENCE_TREND_MINER_MAX_LLM_CLUSTERS` defaults to `10` and accepts a positive
+integer or `all`.
 
-A group of at least two distinct Canonical Articles retained from a candidate
-component by a schema-valid validate or split decision and then cleared by a
-separate cluster-level tragedy and violent-crime safety assessment. Canonical
-Article traffic belongs to at most one Accepted Refined Audience; alternative
-matches are audit evidence only.
+## Cluster Adjudication
+
+The isolated LangGraph run for one selected Preliminary Cluster. Through
+LangChain model and tool integrations it proposes a structured decision,
+receives deterministic validation and semantic/commercial critique, and may
+revise once. Its final result may keep the cluster, split it internally, reject
+members, or reject the whole cluster. It cannot merge separate Preliminary
+Clusters or reconsider a terminal page.
+
+## Terminal Page State
+
+The final, monotonic state of a reviewed Canonical Page: assigned to exactly one
+Final Audience Cluster or rejected. No page may contribute traffic twice.
+
+## Final Audience Cluster
+
+A semantically coherent, commercially meaningful, brand-safe group of at least
+two Canonical Pages produced by Cluster Adjudication.
+
+## Observed Cluster Traffic
+
+The sum of published daily page observations belonging to accepted members of a
+Final Audience Cluster. Traffic is attached only after semantic membership is
+terminal.
+
+## Seven-Day-Equivalent Traffic
+
+Observed Cluster Traffic divided by successful days in its Effective Window and
+multiplied by seven. It allows windows with different available-day counts to be
+compared without favoring the longer Effective Window.
+
+## Robust Growth
+
+A Final Audience Cluster whose conservative current-window minimum exceeds its
+previous-window maximum.
+
+## Robust Shrinking
+
+A Final Audience Cluster whose conservative current-window maximum is below its
+previous-window minimum.
+
+## Uncertain Direction
+
+A Final Audience Cluster whose conservative window ranges overlap. Uncertain
+Direction clusters are excluded from the V2 UI.
+
+## Impact Score
+
+The symmetric scale-and-change score used to rank Robust Growth and Robust
+Shrinking together:
+
+```text
+ln(1 + max(previous_views, current_views))
+* min(abs(log2((current_views + 1) / (previous_views + 1))), 10)
+```
+
+## Cluster Review Budget
+
+The configured bound on Preliminary Clusters selected for Cluster Adjudication,
+not a separate global model-call ceiling. The default ten clusters each use two
+to three normal workflow calls. A larger integer or `all` deliberately raises
+the budget; transient provider attempts are retried and audited.
+
+## Narrative Budget
+
+At most ten final narrative calls per run, one for each top-ranked Robust Growth
+or Robust Shrinking cluster selected for the UI.
+
+## Minimal Run Evidence
+
+The deliberately small V2 record containing run facts, coverage, accepted page
+metadata, accepted page observations, rejected page ID/title/reason, cluster
+decisions, mathematical trend facts, and final narratives. It excludes full API
+responses, full Wikipedia content, singleton records, embeddings, and complete
+pairwise similarities.
+
+## V2 Runnable Module
+
+One of Wikimedia Evidence, Semantic Audience Formation, Cluster Adjudication,
+Trend Portfolio, or Run Publication. Each has a small interface, consumes a
+complete schema-versioned artifact for the shared `run_id`, publishes its own
+artifact atomically, and may be invoked independently. The global command runs
+the same module interfaces in dependency order.
+
+## UI-facing Portfolio
+
+The structured `portfolio.json` consumed by `report.html`. The basic report
+shows dates, audience name and direction, trend summary, percentage change,
+coverage, commercial interpretation, buying-power rating and rationale, the
+Wikipedia-attention limitation note, and a plain empty state. Internal evidence,
+member titles, brand categories, agent records, and degradation details remain
+outside the basic UI.
+
+## Deferred V2 Capability
+
+A deliberately excluded feature: additional countries or languages, navigation
+templates, cross-cluster merging, rejected-page recovery, uncertain-trend UI,
+cross-run caching, brand-category display, a separate critic model, exhaustive
+adjudication as the default, or predictive claims.
