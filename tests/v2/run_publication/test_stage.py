@@ -407,12 +407,9 @@ class RunPublicationStageTest(unittest.TestCase):
             before = {path.name: path.read_bytes() for path in publication.iterdir()}
             trend_path = run_directory / "trend-portfolio.json"
             trend = json.loads(trend_path.read_text(encoding="utf-8"))
-            trend["payload"]["audience_portfolio"][0]["narrative"][
-                "name"
-            ] = "Changed but schema-valid"
-            trend["payload"]["narrative_evidence"][0]["attempts"][-1]["output"][
-                "name"
-            ] = "Changed but schema-valid"
+            trend["payload"]["configuration"]["model"] = "changed/model"
+            for narrative in trend["payload"]["narrative_evidence"]:
+                narrative["model"] = "changed/model"
             trend_path.write_text(json.dumps(trend), encoding="utf-8")
 
             resumed = _run_publication(root)
