@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import unittest
 from datetime import date
+from io import BytesIO
+from unittest.mock import MagicMock, patch
 
-from audience_trend_miner.wikimedia import HttpWikimediaAdapter
+from audience_trend_miner.wikimedia import HttpWikimediaAdapter, UrllibJsonTransport
 
 
 class RecordingJsonTransport:
@@ -31,6 +33,59 @@ class RecordingJsonTransport:
 
 
 class HttpWikimediaAdapterTest(unittest.TestCase):
+    def test_transport_paces_consecutive_requests(self) -> None:
+        ssl_context = MagicMock()
+
+        with (
+            patch("audience_trend_miner.wikimedia.urlopen") as urlopen,
+            patch(
+                "audience_trend_miner.wikimedia.time.monotonic",
+                side_effect=(10.0, 10.0, 10.0, 10.2),
+            ),
+            patch("audience_trend_miner.wikimedia.time.sleep") as sleep,
+        ):
+            urlopen.side_effect = (
+                BytesIO(b'{"ok": true}'),
+                BytesIO(b'{"ok": true}'),
+            )
+            transport = UrllibJsonTransport(
+                ssl_context=ssl_context, request_interval_seconds=0.2
+            )
+            transport.get_json("https://wikimedia.example/first")
+            transport.get_json("https://wikimedia.example/second")
+
+        sleep.assert_called_once_with(0.1999999999999993)
+
+    def test_transport_prefers_macos_system_ca_bundle(self) -> None:
+        ssl_context = MagicMock()
+
+        with (
+            patch("audience_trend_miner.wikimedia.MACOS_CA_BUNDLE") as ca_bundle,
+            patch(
+                "audience_trend_miner.wikimedia.ssl.create_default_context",
+                return_value=ssl_context,
+            ) as create_default_context,
+        ):
+            ca_bundle.is_file.return_value = True
+            ca_bundle.__str__.return_value = "/etc/ssl/cert.pem"
+            transport = UrllibJsonTransport()
+
+        create_default_context.assert_called_once_with(cafile="/etc/ssl/cert.pem")
+        self.assertIs(transport._ssl_context, ssl_context)
+
+    def test_transport_supplies_a_trusted_ssl_context(self) -> None:
+        response = BytesIO(b'{"ok": true}')
+        ssl_context = MagicMock()
+
+        with patch("audience_trend_miner.wikimedia.urlopen") as urlopen:
+            urlopen.return_value = response
+            result = UrllibJsonTransport(ssl_context=ssl_context).get_json(
+                "https://wikimedia.example/data"
+            )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertIs(urlopen.call_args.kwargs["context"], ssl_context)
+
     def test_translates_wikimedia_operations_and_response_envelopes(self) -> None:
         transport = RecordingJsonTransport()
         adapter = HttpWikimediaAdapter(transport=transport)

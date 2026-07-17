@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import json
 
 from audience_trend_miner.classification import (
@@ -56,11 +56,21 @@ class ArticleClassificationTest(unittest.TestCase):
 
         captured: list[object] = []
 
-        def fake_urlopen(api_request: object, timeout: int) -> Response:
-            captured.extend((api_request, timeout))
+        ssl_context = MagicMock()
+
+        def fake_urlopen(
+            api_request: object, timeout: int, context: object
+        ) -> Response:
+            captured.extend((api_request, timeout, context))
             return Response()
 
-        with patch("audience_trend_miner.classification.request.urlopen", fake_urlopen):
+        with (
+            patch("audience_trend_miner.classification.request.urlopen", fake_urlopen),
+            patch(
+                "audience_trend_miner.classification.trusted_ssl_context",
+                return_value=ssl_context,
+            ),
+        ):
             output = GroqStructuredGenerator(api_key="secret").generate(
                 "Classify this", {"type": "object"}
             )
@@ -69,6 +79,11 @@ class ArticleClassificationTest(unittest.TestCase):
         self.assertEqual(json.loads(output), judgment())
         self.assertEqual(request_body["model"], DEFAULT_MODEL)
         self.assertTrue(request_body["response_format"]["json_schema"]["strict"])
+        self.assertEqual(
+            captured[0].get_header("User-agent"),
+            "AudienceTrendMiner/0.1 (https://github.com/aneeshKM/AudienceIntelligence)",
+        )
+        self.assertIs(captured[2], ssl_context)
 
     def test_accepts_a_complete_schema_valid_commercial_judgment(self) -> None:
         generator = ScriptedGenerator(judgment())

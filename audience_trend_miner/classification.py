@@ -12,7 +12,11 @@ from urllib import request
 import jsonschema
 
 from audience_trend_miner.configuration import DEFAULT_MODEL
-from audience_trend_miner.wikimedia import CanonicalArticle
+from audience_trend_miner.wikimedia import (
+    CanonicalArticle,
+    USER_AGENT,
+    trusted_ssl_context,
+)
 
 
 REJECTION_CLASSES = (
@@ -217,10 +221,13 @@ class GroqStructuredGenerator:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
             },
             method="POST",
         )
-        with request.urlopen(api_request, timeout=60) as response:
+        with request.urlopen(
+            api_request, timeout=60, context=trusted_ssl_context()
+        ) as response:
             payload = json.load(response)
         return payload["choices"][0]["message"]["content"]
 

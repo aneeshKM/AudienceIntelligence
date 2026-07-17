@@ -9,6 +9,7 @@ description = "Build emerging audience portfolios from public attention signals.
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "certifi>=2025.1.31",
   "jsonschema>=4.23,<5",
   "psycopg[binary]>=3.2,<4",
   "sentence-transformers>=5,<6",

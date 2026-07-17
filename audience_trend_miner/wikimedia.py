@@ -4,16 +4,27 @@ from dataclasses import dataclass
 from datetime import date
 import json
 from pathlib import Path
+import ssl
 from threading import Lock
+import time
 from typing import Mapping, Protocol
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+import certifi
+
 
 DEFAULT_WIKIMEDIA_REST_BASE_URL = "https://wikimedia.org/api/rest_v1"
 DEFAULT_WIKIPEDIA_ACTION_API_URL = "https://en.wikipedia.org/w/api.php"
 USER_AGENT = "AudienceTrendMiner/0.1 (https://github.com/aneeshKM/AudienceIntelligence)"
+MACOS_CA_BUNDLE = Path("/etc/ssl/cert.pem")
+DEFAULT_REQUEST_INTERVAL_SECONDS = 0.5
+
+
+def trusted_ssl_context() -> ssl.SSLContext:
+    ca_bundle = MACOS_CA_BUNDLE if MACOS_CA_BUNDLE.is_file() else Path(certifi.where())
+    return ssl.create_default_context(cafile=str(ca_bundle))
 
 
 @dataclass(frozen=True)
@@ -146,10 +157,33 @@ class JsonTransport(Protocol):
 
 
 class UrllibJsonTransport:
+    def __init__(
+        self,
+        *,
+        ssl_context: ssl.SSLContext | None = None,
+        request_interval_seconds: float = DEFAULT_REQUEST_INTERVAL_SECONDS,
+    ) -> None:
+        self._ssl_context = ssl_context or trusted_ssl_context()
+        self._request_interval_seconds = request_interval_seconds
+        self._request_lock = Lock()
+        self._next_request_at = 0.0
+
+    def _wait_for_request_slot(self) -> None:
+        with self._request_lock:
+            now = time.monotonic()
+            delay = self._next_request_at - now
+            if delay > 0:
+                time.sleep(delay)
+                now = time.monotonic()
+            self._next_request_at = now + self._request_interval_seconds
+
     def get_json(self, url: str) -> object:
         try:
+            self._wait_for_request_slot()
             request = Request(url, headers={"User-Agent": USER_AGENT})
-            with urlopen(request, timeout=30) as response:
+            with urlopen(
+                request, timeout=30, context=self._ssl_context
+            ) as response:
                 return json.load(response)
         except HTTPError as error:
             if error.code == 429 or error.code >= 500:
