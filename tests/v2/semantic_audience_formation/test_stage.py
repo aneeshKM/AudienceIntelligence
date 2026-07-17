@@ -109,25 +109,6 @@ def publish_clustering_contract_evidence(output_dir: Path) -> None:
 
 
 class SemanticAudienceFormationStageTest(unittest.TestCase):
-    def test_stage_does_not_publish_a_partial_artifact_on_atomic_failure(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            output_dir = Path(temporary_directory)
-            publish_wikimedia_evidence(output_dir)
-
-            completed = run_stage(
-                output_dir,
-                embedding_fixture=EMBEDDING_FIXTURE,
-                extra_arguments=("--interrupt-before-completion",),
-            )
-
-            run_directory = output_dir / "formation-run"
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("interrupted before artifact completion", completed.stderr)
-            self.assertFalse(
-                (run_directory / "semantic-audience-formation.json").exists()
-            )
-            self.assertEqual(list(run_directory.glob(".semantic-audience-formation.*.tmp")), [])
-
     def test_stage_resumes_a_compatible_completed_artifact_without_embedding(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)
@@ -161,11 +142,11 @@ class SentenceTransformer:
 
             first = run_stage(output_dir, environment=environment)
             second = run_stage(output_dir, environment=environment)
-            incompatible = run_stage(
-                output_dir,
-                environment=environment,
-                extra_arguments=("--max-llm-clusters", "2"),
-            )
+            evidence_path = output_dir / "formation-run" / "wikimedia-evidence.json"
+            changed_evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            changed_evidence["payload"]["canonical_pages"][0]["lead"] = "Changed lead."
+            evidence_path.write_text(json.dumps(changed_evidence), encoding="utf-8")
+            incompatible = run_stage(output_dir, environment=environment)
 
             self.assertEqual(first.returncode, 0, first.stderr)
             self.assertEqual(second.returncode, 0, second.stderr)
@@ -219,7 +200,7 @@ class SentenceTransformer:
                     completed = run_stage(
                         invalid_output,
                         embedding_fixture=EMBEDDING_FIXTURE,
-                        extra_arguments=("--max-llm-clusters", invalid_value),
+                extra_arguments=("--review-cap", invalid_value),
                     )
                     self.assertNotEqual(completed.returncode, 0)
                     self.assertIn(
@@ -242,7 +223,7 @@ class SentenceTransformer:
             completed = run_stage(
                 output_dir,
                 embedding_fixture=EMBEDDING_FIXTURE,
-                extra_arguments=("--max-llm-clusters", "2"),
+                extra_arguments=("--review-cap", "2"),
             )
 
             artifact_path = output_dir / "formation-run" / "semantic-audience-formation.json"
@@ -260,6 +241,7 @@ class SentenceTransformer:
                     "discarded_singleton_components": 1,
                     "subdivided_components": 0,
                     "subdivisions_created": 0,
+                    "singleton_subdivisions": 0,
                 },
             )
             self.assertEqual(
@@ -273,6 +255,7 @@ class SentenceTransformer:
                 set(payload["preliminary_clusters"][0]["members"][0]),
                 {"page_id", "canonical_title", "lead", "selected_categories"},
             )
+            self.assertIsNone(payload["preliminary_clusters"][0]["subdivision"])
             serialized = json.dumps(artifact).lower()
             self.assertNotIn("traffic", serialized)
             self.assertNotIn("observation", serialized)

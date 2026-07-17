@@ -31,6 +31,34 @@ def page(page_id: int, title: str, category: str) -> SelectedCategoryPage:
 
 
 class PreliminaryClusteringTest(unittest.TestCase):
+    def test_singleton_subdivision_is_provenanced_without_perfect_cohesion(self) -> None:
+        pages = tuple(
+            page(index, f"Page {index}", "Shared") for index in range(1, 4)
+        )
+        vectors = ((1.0, 0.0), (1.0, 0.0), (0.6, 0.8))
+
+        artifact = form_preliminary_clusters(
+            pages,
+            SequentialEmbeddingAdapter([vectors, vectors]),
+            threshold=0.5,
+            subdivision_policy=SubdivisionPolicy(
+                max_input_tokens=250,
+                fixed_prompt_tokens=0,
+                stricter_threshold_step=0.2,
+            ),
+        )
+
+        self.assertEqual(
+            [cluster.page_ids for cluster in artifact.preliminary_clusters],
+            [(1, 2), (3,)],
+        )
+        singleton = artifact.preliminary_clusters[1]
+        self.assertIsNone(singleton.cohesion)
+        self.assertEqual(singleton.source_component_page_ids, (1, 2, 3))
+        self.assertAlmostEqual(singleton.subdivision_threshold or 0, 0.7)
+        self.assertEqual(artifact.singleton_count, 0)
+        self.assertEqual(artifact.singleton_subdivision_count, 1)
+
     def test_rejects_a_page_that_cannot_fit_the_guard_without_truncation(self) -> None:
         pages = (
             SelectedCategoryPage(1, "One", "x" * 500, ("Shared",)),
@@ -87,6 +115,19 @@ class PreliminaryClusteringTest(unittest.TestCase):
         self.assertEqual(artifact.singleton_count, 0)
         self.assertEqual(artifact.subdivided_component_count, 1)
         self.assertEqual(artifact.subdivision_count, 2)
+        self.assertEqual(artifact.singleton_subdivision_count, 0)
+        subdivision_by_pages = {
+            cluster.page_ids: (
+                cluster.source_component_page_ids,
+                cluster.subdivision_threshold,
+            )
+            for cluster in artifact.preliminary_clusters
+        }
+        self.assertEqual(subdivision_by_pages[(1, 2)][0], (1, 2, 3, 4))
+        self.assertAlmostEqual(subdivision_by_pages[(1, 2)][1] or 0, 0.85)
+        self.assertEqual(subdivision_by_pages[(3, 4)][0], (1, 2, 3, 4))
+        self.assertAlmostEqual(subdivision_by_pages[(3, 4)][1] or 0, 0.85)
+        self.assertEqual(subdivision_by_pages[(5, 6)], ((5, 6), None))
         self.assertEqual(artifact.subdivision_policy.method, "stricter-boundary")
         self.assertEqual(
             artifact.subdivision_policy.token_estimation,

@@ -66,7 +66,9 @@ class EmbeddingAdapter(Protocol):
 @dataclass(frozen=True)
 class PreliminaryCluster:
     members: tuple[SelectedCategoryPage, ...]
-    cohesion: float
+    cohesion: float | None
+    source_component_page_ids: tuple[int, ...]
+    subdivision_threshold: float | None
 
     @property
     def page_ids(self) -> tuple[int, ...]:
@@ -84,6 +86,7 @@ class PreliminaryClusterArtifact:
     singleton_count: int
     subdivided_component_count: int
     subdivision_count: int
+    singleton_subdivision_count: int
 
     def record(self) -> dict[str, object]:
         """Return the minimal serializable evidence produced by fixture formation."""
@@ -127,8 +130,8 @@ def form_preliminary_clusters(
             f"{embedding_adapter.model!r}",
         )
 
-    content_similarity = content_vectors @ content_vectors.T
-    category_similarity = category_vectors @ category_vectors.T
+    content_similarity = np.clip(content_vectors @ content_vectors.T, -1.0, 1.0)
+    category_similarity = np.clip(category_vectors @ category_vectors.T, -1.0, 1.0)
     combined_similarities = (
         CONTENT_WEIGHT * content_similarity + CATEGORY_WEIGHT * category_similarity
     )
@@ -155,17 +158,29 @@ def form_preliminary_clusters(
         ordered_pages,
         subdivision_policy,
     )
-    reviewable_components: list[tuple[int, ...]] = []
+    reviewable_components: list[
+        tuple[ComponentSubdivision, tuple[int, ...]]
+    ] = []
     subdivided_component_count = 0
     subdivision_count = 0
     for component in components:
         if len(component) == 1:
             continue
         subdivisions = subdivider.subdivide(component, threshold=threshold)
-        reviewable_components.extend(subdivisions)
-        if subdivisions != [component]:
+        reviewable_components.extend(
+            (subdivision, component) for subdivision in subdivisions
+        )
+        if not (
+            len(subdivisions) == 1
+            and subdivisions[0].indices == component
+            and subdivisions[0].similarity_threshold is None
+        ):
             subdivided_component_count += 1
             subdivision_count += len(subdivisions)
+    singleton_subdivision_count = sum(
+        len(subdivision.indices) == 1
+        for subdivision, _source_component in reviewable_components
+    )
     if progress is not None:
         progress(
             "subdivide-components",
@@ -175,13 +190,26 @@ def form_preliminary_clusters(
         )
     clusters = [
         PreliminaryCluster(
-            members=tuple(ordered_pages[index] for index in component),
-            cohesion=_mean_pairwise_similarity(component, combined_similarities),
+            members=tuple(
+                ordered_pages[index] for index in subdivision.indices
+            ),
+            cohesion=_mean_pairwise_similarity(
+                subdivision.indices, combined_similarities
+            ),
+            source_component_page_ids=tuple(
+                ordered_pages[index].page_id for index in source_component
+            ),
+            subdivision_threshold=subdivision.similarity_threshold,
         )
-        for component in reviewable_components
+        for subdivision, source_component in reviewable_components
     ]
     clusters.sort(
-        key=lambda cluster: (-cluster.cohesion, -len(cluster.members), cluster.page_ids)
+        key=lambda cluster: (
+            cluster.cohesion is None,
+            -(cluster.cohesion or 0.0),
+            -len(cluster.members),
+            cluster.page_ids,
+        )
     )
     if progress is not None:
         progress(
@@ -198,6 +226,7 @@ def form_preliminary_clusters(
         singleton_count=singleton_count,
         subdivided_component_count=subdivided_component_count,
         subdivision_count=subdivision_count,
+        singleton_subdivision_count=singleton_subdivision_count,
     )
 
 
@@ -232,9 +261,9 @@ def _validated_embedding_matrix(
 
 def _mean_pairwise_similarity(
     component: Sequence[int], similarities: NDArray[np.float64]
-) -> float:
+) -> float | None:
     if len(component) == 1:
-        return 1.0
+        return None
     component_similarities = similarities[np.ix_(component, component)]
     pair_values = component_similarities[np.triu_indices(len(component), k=1)]
     return float(np.mean(pair_values))
@@ -261,6 +290,12 @@ def _connected_components(
 
 
 @dataclass(frozen=True)
+class ComponentSubdivision:
+    indices: tuple[int, ...]
+    similarity_threshold: float | None
+
+
+@dataclass(frozen=True)
 class _ComponentSubdivider:
     similarities: NDArray[np.float64]
     pages: Sequence[SelectedCategoryPage]
@@ -271,9 +306,10 @@ class _ComponentSubdivider:
         component: tuple[int, ...],
         *,
         threshold: float,
-    ) -> list[tuple[int, ...]]:
+        subdivision_threshold: float | None = None,
+    ) -> list[ComponentSubdivision]:
         if self._estimated_input_tokens(component) <= self.policy.max_input_tokens:
-            return [component]
+            return [ComponentSubdivision(component, subdivision_threshold)]
         for index in component:
             if self._estimated_input_tokens((index,)) > self.policy.max_input_tokens:
                 raise V2ContractError(
@@ -300,14 +336,19 @@ class _ComponentSubdivider:
                 return self.subdivide(
                     component,
                     threshold=stricter_threshold,
+                    subdivision_threshold=stricter_threshold,
                 )
-            return self._pack_indistinguishable_members(component)
+            return [
+                ComponentSubdivision(group, 1.0)
+                for group in self._pack_indistinguishable_members(component)
+            ]
         return [
             nested
             for subdivision in subdivisions
             for nested in self.subdivide(
                 subdivision,
                 threshold=stricter_threshold,
+                subdivision_threshold=stricter_threshold,
             )
         ]
 

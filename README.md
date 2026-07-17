@@ -112,7 +112,7 @@ python -m audience_trend_miner v2-semantic-audience-formation \
   --run-id example-run \
   --output-dir runs \
   --similarity-threshold 0.5 \
-  --max-llm-clusters 10
+  --review-cap 10
 ```
 
 Inference is batched and similarity is vectorized in memory. Raw embedding
@@ -132,7 +132,7 @@ for the evidence and rationale.
 
 After cohesion ranking, the stage selects at most ten Preliminary Clusters by
 default. Set `AUDIENCE_TREND_MINER_MAX_LLM_CLUSTERS` or pass
-`--max-llm-clusters` with a positive integer; use `all` for an uncapped
+`--review-cap` with a positive integer; use `all` for an uncapped
 experiment. The validated `semantic-audience-formation.json` artifact records
 the cap and selection, singleton, omission, and subdivision counts while
 excluding traffic, embeddings, and the complete similarity matrix. Publication

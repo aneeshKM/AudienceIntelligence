@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -35,14 +37,16 @@ from audience_trend_miner.v2.wikimedia_evidence import consume_wikimedia_evidenc
 
 STAGE = "semantic-audience-formation"
 SCHEMA_PATH = Path(__file__).with_name("schemas") / "semantic-audience-formation.schema.json"
-DEFAULT_MAX_LLM_CLUSTERS = 10
-ReviewCap = int | Literal["all"]
+DEFAULT_REVIEW_CAP = 10
+ReviewCapValue = int | Literal["all"]
 
 
-def parse_review_cap(value: object) -> ReviewCap:
+def parse_review_cap(value: object) -> ReviewCapValue:
     """Parse the configured Cluster Adjudication review budget."""
     if value == "all":
         return "all"
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
     if (
         not isinstance(value, str)
         or not value
@@ -101,26 +105,24 @@ def execute_preliminary_clustering(
     progress_sink: ProgressSink,
     embedding_adapter: EmbeddingAdapter,
     threshold: float,
-    max_llm_clusters: ReviewCap = DEFAULT_MAX_LLM_CLUSTERS,
+    review_cap: ReviewCapValue = DEFAULT_REVIEW_CAP,
     wikimedia_evidence_path: Path | None = None,
-    interrupt_before_completion: bool = False,
 ) -> Path:
     """Form, cap, and atomically publish Preliminary Cluster evidence."""
-    if not (
-        max_llm_clusters == "all"
-        or (
-            isinstance(max_llm_clusters, int)
-            and not isinstance(max_llm_clusters, bool)
-            and max_llm_clusters > 0
-        )
-    ):
-        raise V2ContractError("review cap must be a positive integer or 'all'")
+    review_cap = parse_review_cap(review_cap)
+    evidence_path = wikimedia_evidence_path or (
+        output_root / run_id / "wikimedia-evidence.json"
+    )
+    wikimedia_artifact = consume_wikimedia_evidence(evidence_path, run_id=run_id)
     subdivision_policy = SubdivisionPolicy()
     requested_configuration = _formation_configuration(
         embedding_model=embedding_adapter.model,
         threshold=threshold,
         subdivision_policy=subdivision_policy,
-        review_cap=max_llm_clusters,
+        review_cap=review_cap,
+        wikimedia_evidence_fingerprint=_semantic_evidence_fingerprint(
+            wikimedia_artifact
+        ),
     )
     artifact_path = output_root / run_id / f"{STAGE}.json"
     if artifact_path.exists():
@@ -186,15 +188,15 @@ def execute_preliminary_clustering(
     )
     selected_clusters = (
         result.preliminary_clusters
-        if max_llm_clusters == "all"
-        else result.preliminary_clusters[:max_llm_clusters]
+        if review_cap == "all"
+        else result.preliminary_clusters[:review_cap]
     )
     eligible_count = len(result.preliminary_clusters)
     selected_count = len(selected_clusters)
     emit_formation_progress(
         "select-review-cap",
         f"selected {selected_count} of {eligible_count} eligible Preliminary Clusters "
-        f"with review cap {max_llm_clusters!r}",
+        f"with review cap {review_cap!r}",
     )
     payload = {
         "configuration": requested_configuration,
@@ -205,10 +207,21 @@ def execute_preliminary_clustering(
             "discarded_singleton_components": result.singleton_count,
             "subdivided_components": result.subdivided_component_count,
             "subdivisions_created": result.subdivision_count,
+            "singleton_subdivisions": result.singleton_subdivision_count,
         },
         "preliminary_clusters": [
             {
                 "cohesion": cluster.cohesion,
+                "subdivision": (
+                    {
+                        "source_component_page_ids": list(
+                            cluster.source_component_page_ids
+                        ),
+                        "similarity_threshold": cluster.subdivision_threshold,
+                    }
+                    if cluster.subdivision_threshold is not None
+                    else None
+                ),
                 "members": [
                     {
                         "page_id": member.page_id,
@@ -238,11 +251,7 @@ def execute_preliminary_clustering(
         ) from error
     validate_artifact(artifact, run_id=run_id, stage=STAGE)
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(
-        artifact_path,
-        artifact,
-        interrupt_before_replace=interrupt_before_completion,
-    )
+    atomic_write_json(artifact_path, artifact)
     progress_sink(
         ProgressEvent(
             run_id=run_id,
@@ -266,7 +275,8 @@ def _formation_configuration(
     embedding_model: str,
     threshold: float,
     subdivision_policy: SubdivisionPolicy,
-    review_cap: ReviewCap,
+    review_cap: ReviewCapValue,
+    wikimedia_evidence_fingerprint: str,
 ) -> dict[str, object]:
     return {
         "category_rule_set_version": CATEGORY_RULE_SET_VERSION,
@@ -276,4 +286,31 @@ def _formation_configuration(
         "similarity_threshold": threshold,
         "subdivision_policy": asdict(subdivision_policy),
         "review_cap": review_cap,
+        "wikimedia_evidence_fingerprint": wikimedia_evidence_fingerprint,
     }
+
+
+def _semantic_evidence_fingerprint(artifact: dict[str, object]) -> str:
+    payload = artifact["payload"]
+    assert isinstance(payload, dict)
+    canonical_pages = payload["canonical_pages"]
+    assert isinstance(canonical_pages, list)
+    semantic_evidence = sorted(
+        (
+            {
+                "page_id": page["page_id"],
+                "canonical_title": page["canonical_title"],
+                "lead": page["lead"],
+                "categories": sorted(set(page["categories"])),
+            }
+            for page in canonical_pages
+        ),
+        key=lambda page: (page["page_id"], page["canonical_title"]),
+    )
+    encoded = json.dumps(
+        semantic_evidence,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"

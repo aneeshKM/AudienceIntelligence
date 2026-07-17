@@ -82,7 +82,7 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
         execute_preliminary_clustering,
     )
     from audience_trend_miner.v2.semantic_audience_formation.stage import (
-        DEFAULT_MAX_LLM_CLUSTERS,
+        DEFAULT_REVIEW_CAP,
         parse_review_cap,
     )
     from audience_trend_miner.v2.semantic_audience_formation.embeddings import (
@@ -141,18 +141,13 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
         ),
     )
     parser.add_argument(
-        "--max-llm-clusters",
+        "--review-cap",
         type=review_cap_argument,
         default=os.environ.get(
             "AUDIENCE_TREND_MINER_MAX_LLM_CLUSTERS",
-            str(DEFAULT_MAX_LLM_CLUSTERS),
+            str(DEFAULT_REVIEW_CAP),
         ),
         help="Preliminary Cluster review cap: a positive integer or 'all'",
-    )
-    parser.add_argument(
-        "--interrupt-before-completion",
-        action="store_true",
-        help=argparse.SUPPRESS,
     )
     parser.add_argument("--progress-format", choices=("human", "json"), default="human")
     parsed = parser.parse_args(arguments)
@@ -180,8 +175,7 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
                     parsed.embedding_fixture
                 ),
                 threshold=parsed.similarity_threshold,
-                max_llm_clusters=parsed.max_llm_clusters,
-                interrupt_before_completion=parsed.interrupt_before_completion,
+                review_cap=parsed.review_cap,
                 progress_sink=sink,
             )
         )
@@ -195,8 +189,7 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
                 batch_size=parsed.embedding_batch_size,
             ),
             threshold=parsed.similarity_threshold,
-            max_llm_clusters=parsed.max_llm_clusters,
-            interrupt_before_completion=parsed.interrupt_before_completion,
+            review_cap=parsed.review_cap,
             progress_sink=sink,
         )
     )
