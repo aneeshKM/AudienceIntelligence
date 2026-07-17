@@ -100,6 +100,24 @@ veto; singleton components remain auditable standalone signals. Refined
 audiences remain outside `portfolio.json` until the later scoring and portfolio
 assembly stages.
 
+V2 Semantic Audience Formation runs local Sentence Transformer inference when
+`v2-semantic-audience-formation` receives `--similarity-threshold`. It defaults
+to `sentence-transformers/all-mpnet-base-v2` with batches of 32. Override these
+with `--embedding-model` and `--embedding-batch-size`, or with
+`AUDIENCE_TREND_MINER_EMBEDDING_MODEL` and
+`AUDIENCE_TREND_MINER_EMBEDDING_BATCH_SIZE`. For example:
+
+```bash
+python -m audience_trend_miner v2-semantic-audience-formation \
+  --run-id example-run \
+  --output-dir runs \
+  --similarity-threshold 0.5
+```
+
+Inference is batched and similarity is vectorized in memory. Raw embedding
+vectors and the complete pairwise similarity matrix are not included in stage
+artifacts or progress logs.
+
 For local development, copy `.env.example` to `.env` and set both values there:
 
 ```dotenv

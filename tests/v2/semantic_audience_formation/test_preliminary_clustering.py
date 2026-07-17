@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
+import numpy as np
+
 from audience_trend_miner.v2.semantic_audience_formation import SelectedCategoryPage
 from audience_trend_miner.v2.semantic_audience_formation.clustering import (
     form_preliminary_clusters,
@@ -10,6 +12,7 @@ from audience_trend_miner.v2.semantic_audience_formation.clustering import (
 from audience_trend_miner.v2.semantic_audience_formation.embeddings import (
     FrozenEmbeddingAdapter,
 )
+from audience_trend_miner.v2.shared import V2ContractError
 
 
 FIXTURE = (
@@ -68,6 +71,83 @@ class PreliminaryClusteringTest(unittest.TestCase):
         }
         self.assertEqual(retained_page_ids, set(range(1, 10)))
         self.assertNotIn("traffic", str(record).lower())
+
+    def test_rejects_invalid_embeddings_before_similarity_is_used(self) -> None:
+        pages = (page(1, "One", "Shared"), page(2, "Two", "Shared"))
+        scenarios = (
+            ([((), ()), ((1.0,), (1.0,))], "must be non-empty"),
+            ([((1.0,), (float("nan"),)), ((1.0,), (1.0,))], "must be finite"),
+            ([((0.0,), (0.0,)), ((1.0,), (1.0,))], "non-zero magnitude"),
+            (
+                [((1.0,), (1.0, 2.0)), ((1.0,), (1.0,))],
+                "dimensionally consistent",
+            ),
+            (
+                [((1.0,), (1.0,)), ((1.0, 0.0), (1.0, 0.0))],
+                "dimensionally consistent",
+            ),
+        )
+
+        for responses, expected_error in scenarios:
+            with self.subTest(expected_error=expected_error):
+                adapter = SequentialEmbeddingAdapter(responses)
+                with self.assertRaisesRegex(V2ContractError, expected_error):
+                    form_preliminary_clusters(pages, adapter, threshold=0.5)
+
+    def test_handles_representative_candidate_universe_without_persisting_vectors(self) -> None:
+        pages = tuple(page(index, f"Page {index}", "Shared") for index in range(1, 258))
+        adapter = ConstantNumpyEmbeddingAdapter()
+
+        artifact = form_preliminary_clusters(pages, adapter, threshold=0.9)
+
+        self.assertEqual(adapter.batch_sizes, [257, 257])
+        self.assertEqual(len(artifact.preliminary_clusters), 1)
+        self.assertEqual(len(artifact.preliminary_clusters[0].members), 257)
+        record = artifact.record()
+        self.assertNotIn("embeddings", record)
+        self.assertNotIn("similarity_matrix", record)
+
+    def test_preserves_cosine_similarity_for_finite_extreme_vectors(self) -> None:
+        pages = (page(1, "One", "Shared"), page(2, "Two", "Shared"))
+        extreme_vectors = (
+            ((1e308, 1e308), (1e308, 1e308)),
+            ((5e-324, 5e-324), (5e-324, 5e-324)),
+        )
+
+        artifact = form_preliminary_clusters(
+            pages,
+            SequentialEmbeddingAdapter(list(extreme_vectors)),
+            threshold=0.9,
+        )
+
+        self.assertEqual(
+            [cluster.page_ids for cluster in artifact.preliminary_clusters],
+            [(1, 2)],
+        )
+        self.assertAlmostEqual(artifact.preliminary_clusters[0].cohesion, 1.0)
+
+
+class SequentialEmbeddingAdapter:
+    model = "invalid-fixture"
+
+    def __init__(self, responses: list[tuple[tuple[float, ...], ...]]) -> None:
+        self._responses = iter(responses)
+
+    def embed(
+        self, _representations: tuple[str, ...]
+    ) -> tuple[tuple[float, ...], ...]:
+        return next(self._responses)
+
+
+class ConstantNumpyEmbeddingAdapter:
+    model = "representative-fixture"
+
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+
+    def embed(self, representations: tuple[str, ...]) -> np.ndarray:
+        self.batch_sizes.append(len(representations))
+        return np.tile(np.array((1.0, 0.5, 0.25)), (len(representations), 1))
 
 
 if __name__ == "__main__":

@@ -4,6 +4,9 @@ from dataclasses import asdict, dataclass
 import math
 from typing import Protocol, Sequence
 
+import numpy as np
+from numpy.typing import NDArray
+
 from audience_trend_miner.v2.semantic_audience_formation.categories import (
     SelectedCategoryPage,
 )
@@ -19,7 +22,7 @@ class EmbeddingAdapter(Protocol):
 
     def embed(
         self, representations: Sequence[str]
-    ) -> Sequence[Sequence[float]]: ...
+    ) -> Sequence[Sequence[float]] | NDArray[np.float64]: ...
 
 
 @dataclass(frozen=True)
@@ -64,27 +67,29 @@ def form_preliminary_clusters(
         + (" | ".join(page.selected_categories) or "(none)")
         for page in ordered_pages
     )
-    content_vectors = embedding_adapter.embed(content_representations)
-    category_vectors = embedding_adapter.embed(category_representations)
-    if len(content_vectors) != len(ordered_pages) or len(category_vectors) != len(
-        ordered_pages
-    ):
-        raise V2ContractError("embedding count does not match Canonical Page count")
+    content_vectors = _validated_embedding_matrix(
+        embedding_adapter.embed(content_representations),
+        expected_count=len(ordered_pages),
+    )
+    category_vectors = _validated_embedding_matrix(
+        embedding_adapter.embed(category_representations),
+        expected_count=len(ordered_pages),
+    )
+    if content_vectors.shape[1] != category_vectors.shape[1]:
+        raise V2ContractError("embeddings must be dimensionally consistent")
 
-    similarities: dict[tuple[int, int], float] = {}
+    content_similarity = content_vectors @ content_vectors.T
+    category_similarity = category_vectors @ category_vectors.T
+    combined_similarities = (
+        CONTENT_WEIGHT * content_similarity + CATEGORY_WEIGHT * category_similarity
+    )
     neighbors = {index: set() for index in range(len(ordered_pages))}
-    for left in range(len(ordered_pages)):
-        for right in range(left + 1, len(ordered_pages)):
-            combined_similarity = (
-                CONTENT_WEIGHT
-                * _cosine_similarity(content_vectors[left], content_vectors[right])
-                + CATEGORY_WEIGHT
-                * _cosine_similarity(category_vectors[left], category_vectors[right])
-            )
-            similarities[(left, right)] = combined_similarity
-            if combined_similarity >= threshold:
-                neighbors[left].add(right)
-                neighbors[right].add(left)
+    edge_indices = np.argwhere(
+        np.triu(combined_similarities >= threshold, k=1)
+    )
+    for left, right in edge_indices:
+        neighbors[int(left)].add(int(right))
+        neighbors[int(right)].add(int(left))
 
     components: list[tuple[int, ...]] = []
     unseen = set(neighbors)
@@ -105,7 +110,7 @@ def form_preliminary_clusters(
     clusters = [
         PreliminaryCluster(
             members=tuple(ordered_pages[index] for index in component),
-            cohesion=_mean_pairwise_similarity(component, similarities),
+            cohesion=_mean_pairwise_similarity(component, combined_similarities),
         )
         for component in components
         if len(component) > 1
@@ -123,27 +128,38 @@ def form_preliminary_clusters(
     )
 
 
-def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
-    if not left or len(left) != len(right):
-        raise V2ContractError("embeddings must be non-empty and dimensionally consistent")
-    left_magnitude = math.sqrt(sum(value * value for value in left))
-    right_magnitude = math.sqrt(sum(value * value for value in right))
-    if not left_magnitude or not right_magnitude:
+def _validated_embedding_matrix(
+    vectors: Sequence[Sequence[float]] | NDArray[np.float64],
+    *,
+    expected_count: int,
+) -> NDArray[np.float64]:
+    if expected_count == 0:
+        if len(vectors) != 0:
+            raise V2ContractError("embedding count does not match Canonical Page count")
+        return np.empty((0, 0), dtype=float)
+    try:
+        matrix = np.asarray(vectors, dtype=float)
+    except (TypeError, ValueError) as error:
+        raise V2ContractError("embeddings must be dimensionally consistent") from error
+    if matrix.ndim != 2 or matrix.shape[0] != expected_count:
+        if matrix.ndim == 2 and matrix.shape[0] != expected_count:
+            raise V2ContractError("embedding count does not match Canonical Page count")
+        raise V2ContractError("embeddings must be dimensionally consistent")
+    if matrix.shape[1] == 0:
+        raise V2ContractError("embeddings must be non-empty")
+    if not np.isfinite(matrix).all():
+        raise V2ContractError("embeddings must be finite")
+    scales = np.max(np.abs(matrix), axis=1)
+    if np.any(scales == 0):
         raise V2ContractError("embeddings must have non-zero magnitude")
-    similarity = sum(a * b for a, b in zip(left, right, strict=True)) / (
-        left_magnitude * right_magnitude
-    )
-    if not math.isfinite(similarity):
-        raise V2ContractError("embedding similarity must be finite")
-    return similarity
+    scaled_matrix = matrix / scales[:, np.newaxis]
+    magnitudes = np.linalg.norm(scaled_matrix, axis=1)
+    return scaled_matrix / magnitudes[:, np.newaxis]
 
 
 def _mean_pairwise_similarity(
-    component: Sequence[int], similarities: dict[tuple[int, int], float]
+    component: Sequence[int], similarities: NDArray[np.float64]
 ) -> float:
-    pair_values = [
-        similarities[(component[left], component[right])]
-        for left in range(len(component))
-        for right in range(left + 1, len(component))
-    ]
-    return sum(pair_values) / len(pair_values)
+    component_similarities = similarities[np.ix_(component, component)]
+    pair_values = component_similarities[np.triu_indices(len(component), k=1)]
+    return float(np.mean(pair_values))

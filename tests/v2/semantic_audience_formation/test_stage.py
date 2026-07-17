@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,8 @@ def run_stage(
     run_id: str = "formation-run",
     *,
     embedding_fixture: Path | None = None,
+    extra_arguments: tuple[str, ...] = (),
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     arguments = [
         sys.executable,
@@ -41,11 +44,13 @@ def run_stage(
                 "0.3",
             ]
         )
+    arguments.extend(extra_arguments)
     return subprocess.run(
         arguments,
         check=False,
         capture_output=True,
         text=True,
+        env=environment,
     )
 
 
@@ -75,6 +80,77 @@ def publish_wikimedia_evidence(output_dir: Path, run_id: str = "formation-run") 
 
 
 class SemanticAudienceFormationStageTest(unittest.TestCase):
+    def test_stage_runs_production_embeddings_with_safe_configuration_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            publish_wikimedia_evidence(output_dir)
+            fake_package_root = output_dir / "fake-package"
+            fake_package = fake_package_root / "sentence_transformers"
+            fake_package.mkdir(parents=True)
+            configuration_log = output_dir / "encoder-configuration.jsonl"
+            fake_package.joinpath("__init__.py").write_text(
+                """\
+import json
+import os
+from pathlib import Path
+
+class SentenceTransformer:
+    def __init__(self, model):
+        self.model = model
+
+    def encode(self, representations, *, batch_size, convert_to_numpy):
+        record = {
+            \"model\": self.model,
+            \"batch_size\": batch_size,
+            \"count\": len(representations),
+        }
+        with Path(os.environ[\"TEST_ENCODER_LOG\"]).open(
+            \"a\", encoding=\"utf-8\"
+        ) as log:
+            log.write(json.dumps(record) + \"\\n\")
+        return [[1.0, 0.0] for _representation in representations]
+""",
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment["TEST_ENCODER_LOG"] = str(configuration_log)
+            environment["PYTHONPATH"] = os.pathsep.join(
+                filter(None, (str(fake_package_root), environment.get("PYTHONPATH")))
+            )
+
+            completed = run_stage(
+                output_dir,
+                extra_arguments=(
+                    "--similarity-threshold",
+                    "0.9",
+                    "--embedding-model",
+                    "local/override-model",
+                    "--embedding-batch-size",
+                    "1",
+                ),
+                environment=environment,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            events = [json.loads(line) for line in completed.stdout.splitlines()]
+            self.assertEqual(
+                [event["operation"] for event in events],
+                ["select-categories", "form-preliminary-clusters"],
+            )
+            self.assertIn("using model 'local/override-model'", events[1]["message"])
+            configurations = [
+                json.loads(line) for line in configuration_log.read_text().splitlines()
+            ]
+            self.assertEqual(
+                configurations,
+                [
+                    {"model": "local/override-model", "batch_size": 1, "count": 2},
+                    {"model": "local/override-model", "batch_size": 1, "count": 2},
+                ],
+            )
+            self.assertNotIn("embedding_vectors", completed.stdout)
+            self.assertNotIn("similarity_matrix", completed.stdout)
+
     def test_stage_forms_fixture_backed_preliminary_clusters(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)

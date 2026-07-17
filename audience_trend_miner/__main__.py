@@ -82,7 +82,10 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
         execute_preliminary_clustering,
     )
     from audience_trend_miner.v2.semantic_audience_formation.embeddings import (
+        DEFAULT_EMBEDDING_BATCH_SIZE,
+        DEFAULT_EMBEDDING_MODEL,
         FrozenEmbeddingAdapter,
+        SentenceTransformerEmbeddingAdapter,
     )
 
     parser = argparse.ArgumentParser(
@@ -93,6 +96,20 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
     parser.add_argument("--wikimedia-evidence", type=Path)
     parser.add_argument("--embedding-fixture", type=Path)
     parser.add_argument("--similarity-threshold", type=float)
+    parser.add_argument(
+        "--embedding-model",
+        default=os.environ.get(
+            "AUDIENCE_TREND_MINER_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL
+        ),
+    )
+    parser.add_argument(
+        "--embedding-batch-size",
+        type=int,
+        default=os.environ.get(
+            "AUDIENCE_TREND_MINER_EMBEDDING_BATCH_SIZE",
+            str(DEFAULT_EMBEDDING_BATCH_SIZE),
+        ),
+    )
     parser.add_argument("--progress-format", choices=("human", "json"), default="human")
     parsed = parser.parse_args(arguments)
     sink = _v2_progress_sink(parsed.progress_format)
@@ -112,7 +129,19 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
             )
         )
     if parsed.similarity_threshold is not None:
-        parser.error("--similarity-threshold requires --embedding-fixture")
+        return _execute_v2(
+            lambda: execute_preliminary_clustering(
+                run_id=parsed.run_id,
+                output_root=parsed.output_dir,
+                wikimedia_evidence_path=parsed.wikimedia_evidence,
+                embedding_adapter=SentenceTransformerEmbeddingAdapter(
+                    model=parsed.embedding_model,
+                    batch_size=parsed.embedding_batch_size,
+                ),
+                threshold=parsed.similarity_threshold,
+                progress_sink=sink,
+            )
+        )
     return _execute_v2(
         lambda: execute_category_selection(
             run_id=parsed.run_id,
