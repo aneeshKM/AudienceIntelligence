@@ -48,6 +48,19 @@ event for streaming consumers. Production runs require `DATABASE_URL` and
 `GROQ_API_KEY`; each external boundary also has a fixture option for deterministic
 integration runs.
 
+Start the local V2 run server on loopback (the default is
+`http://127.0.0.1:8000`):
+
+```bash
+audience-trend-miner v2-ui --output-dir runs
+```
+
+`POST /api/runs` accepts an ISO As-of Date and safe run ID, starts the installed
+global V2 CLI, and returns immediately. `GET /api/runs/{run_id}` reports the
+server-owned process state after browser navigation or disconnection. A run is
+successful only when the CLI exits cleanly and the same run has a complete,
+schema-valid, integrity-checked Run Publication contract.
+
 Use a stable run identifier to resume interrupted Wikimedia work without
 refetching completed evidence:
 

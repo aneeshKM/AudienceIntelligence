@@ -70,6 +70,15 @@ FORBIDDEN_KEYS = frozenset(
 )
 
 
+def validate_completed_publication(directory: Path, *, run_id: str) -> None:
+    """Validate the final contract exposed to downstream product consumers."""
+    validate_identifier(run_id, "run_id")
+    try:
+        _load_completed_publication(directory, run_id)
+    except (OSError, json.JSONDecodeError, jsonschema.ValidationError) as error:
+        raise V2ContractError("publication contract is incomplete") from error
+
+
 def execute_run_publication(
     *,
     run_id: str,
@@ -585,18 +594,7 @@ def _validate_staged_publication(
     run_id: str,
     artifacts: dict[str, dict[str, object]],
 ) -> None:
-    if not directory.is_dir() or {path.name for path in directory.iterdir()} != set(
-        FINAL_SCHEMAS
-    ):
-        raise V2ContractError("publication does not contain the exact artifact set")
-    products: dict[str, dict[str, object]] = {}
-    for name, schema in FINAL_SCHEMAS.items():
-        loaded = json.loads((directory / name).read_text(encoding="utf-8"))
-        validate_schema(schema, loaded)
-        if not isinstance(loaded, dict) or loaded.get("run_id") != run_id:
-            raise V2ContractError("published artifact belongs to different run facts")
-        products[name] = loaded
-    _ensure_safe(products)
+    products = _load_completed_publication(directory, run_id)
     expected_portfolio, expected_audit = _assemble_products(run_id, artifacts)
     if (
         products["portfolio.json"] != expected_portfolio
@@ -611,6 +609,32 @@ def _validate_staged_publication(
     )
     if manifest != expected_manifest:
         raise V2ContractError("manifest provenance is internally inconsistent")
+
+
+def _load_completed_publication(
+    directory: Path, run_id: str
+) -> dict[str, dict[str, object]]:
+    if not directory.is_dir() or {path.name for path in directory.iterdir()} != set(
+        FINAL_SCHEMAS
+    ):
+        raise V2ContractError("publication does not contain the exact artifact set")
+    products: dict[str, dict[str, object]] = {}
+    for name, schema in FINAL_SCHEMAS.items():
+        loaded = json.loads((directory / name).read_text(encoding="utf-8"))
+        validate_schema(schema, loaded)
+        if not isinstance(loaded, dict) or loaded.get("run_id") != run_id:
+            raise V2ContractError("published artifact belongs to different run facts")
+        products[name] = loaded
+    _ensure_safe(products)
+    portfolio = products["portfolio.json"]
+    manifest = products["manifest.json"]
+    if (
+        manifest["as_of_date"] != portfolio["as_of_date"]
+        or manifest["nominal_windows"] != portfolio["nominal_windows"]
+        or _mapping(portfolio["completion"])["empty"]
+        != (len(cast(list[object], portfolio["audience_portfolio"])) == 0)
+    ):
+        raise V2ContractError("manifest provenance is internally inconsistent")
     published = _mapping(manifest["published_artifacts"])
     for name in ("portfolio.json", "audit.json"):
         record = _mapping(published[name])
@@ -619,6 +643,7 @@ def _validate_staged_publication(
             or record["bytes"] != (directory / name).stat().st_size
         ):
             raise V2ContractError("published artifact integrity check failed")
+    return products
 
 
 def _module_integrity(

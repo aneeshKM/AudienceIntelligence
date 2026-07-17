@@ -10,6 +10,8 @@ from typing import Callable
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "v2-ui":
+        return _v2_ui_main(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "v2-run":
         return _v2_run_main(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "v2-fixture-stage":
@@ -32,6 +34,17 @@ def main() -> int:
     from audience_trend_miner.run import execute_run
 
     execute_run(arguments.as_of, arguments.output_dir, run_id=arguments.run_id)
+    return 0
+
+
+def _v2_ui_main(arguments: list[str]) -> int:
+    from audience_trend_miner.v2.ui import serve
+
+    parser = argparse.ArgumentParser(prog="audience-trend-miner v2-ui")
+    parser.add_argument("--output-dir", type=Path, default=Path("runs"))
+    parser.add_argument("--port", type=int, default=8000)
+    parsed = parser.parse_args(arguments)
+    serve(output_root=parsed.output_dir, port=parsed.port)
     return 0
 
 
