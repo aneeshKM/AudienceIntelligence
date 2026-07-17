@@ -98,6 +98,76 @@ def _write_valid_fixture(path: Path) -> None:
 
 
 class TrendPortfolioStageTest(unittest.TestCase):
+    def test_rejects_equivalent_prohibited_claims_and_invented_traffic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _publish_qualifying_upstream(root, "narrative-run")
+            fixture_path = root / "claims.json"
+            _write_valid_fixture(fixture_path)
+            fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+            valid_first = fixture["clusters"][0]["responses"][0]
+            valid_second = fixture["clusters"][1]["responses"][0]
+            fixture["clusters"][0]["responses"] = [
+                {
+                    **valid_first,
+                    "summary": (
+                        "Demand was driven by an audience consisting of homeowners; "
+                        "high earners are ready to purchase and expected to grow."
+                    ),
+                    "brand_categories": ["Affluent shoppers"],
+                },
+                valid_first,
+            ]
+            fixture["clusters"][1]["responses"] = [
+                {
+                    **valid_second,
+                    "summary": "Traffic reached two million views in the comparison.",
+                },
+                valid_second,
+            ]
+            fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+
+            completed = _run_stage(root, fixture_path)
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(
+                (root / "narrative-run" / "trend-portfolio.json").read_text()
+            )["payload"]
+            first_errors = payload["narrative_evidence"][0]["attempts"][0]["errors"]
+            for claim in ("causation", "reader identity", "income", "intent", "prediction"):
+                self.assertTrue(any(claim in error for error in first_errors), claim)
+            second_errors = payload["narrative_evidence"][1]["attempts"][0]["errors"]
+            self.assertTrue(any("traffic" in error for error in second_errors))
+
+    def test_resume_rejects_tampered_checkpoint_facts_and_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _publish_qualifying_upstream(root, "narrative-run")
+            fixture_path = root / "checkpoint.json"
+            _write_valid_fixture(fixture_path)
+            fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+            invalid = {
+                **fixture["clusters"][1]["responses"][0],
+                "summary": "This audience will buy equipment.",
+            }
+            fixture["clusters"][1]["responses"] = [invalid, invalid, invalid]
+            fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+            failed = _run_stage(root, fixture_path)
+            self.assertNotEqual(failed.returncode, 0)
+            checkpoint_path = (
+                root / "narrative-run" / ".trend-portfolio.checkpoint.json"
+            )
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            checkpoint["completed"][0]["portfolio_item"]["impact_score"] = 0
+            checkpoint["completed"][0]["evidence"]["prompt"] = "tampered"
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+            _write_valid_fixture(fixture_path)
+
+            resumed = _run_stage(root, fixture_path)
+
+            self.assertNotEqual(resumed.returncode, 0)
+            self.assertIn("checkpoint deterministic facts", resumed.stderr)
+
     def test_no_qualifying_cluster_publishes_empty_portfolio_without_calls(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

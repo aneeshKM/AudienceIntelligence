@@ -44,11 +44,58 @@ NARRATIVE_SCHEMA: dict[str, object] = {
 }
 
 _PROHIBITED_CLAIMS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("causation", re.compile(r"\b(caus(?:e|ed|es|ing)|because of|led to|resulted in)\b", re.I)),
-    ("reader identity", re.compile(r"\b(readers?|viewers?|users?)\s+(?:are|were|identify|belong)\b", re.I)),
-    ("income", re.compile(r"\b(income|salary|wealthy|affluent|high[- ]net[- ]worth)\b", re.I)),
-    ("intent", re.compile(r"\b(intend|intends|intending|planning to buy|purchase intent|shopping for)\b", re.I)),
-    ("prediction", re.compile(r"\b(will|forecast|predict(?:s|ed|ion)?|likely to|future demand)\b", re.I)),
+    (
+        "causation",
+        re.compile(
+            r"\b(caus(?:e|ed|es|ing)|because of|due to|led to|resulted in|"
+            r"driv(?:e|es|en|ing)|prompt(?:s|ed|ing)|trigger(?:s|ed|ing)|explains?)\b",
+            re.I,
+        ),
+    ),
+    (
+        "reader identity",
+        re.compile(
+            r"\b(readers?|viewers?|users?|homeowners?|shoppers?|buyers?|fans?|"
+            r"enthusiasts?)\b|\baudience\s+(?:consists?|comprises?|is|are)\b",
+            re.I,
+        ),
+    ),
+    (
+        "income",
+        re.compile(
+            r"\b(income|salary|wealthy|affluent|high[- ]net[- ]worth|"
+            r"high[- ]earners?|low[- ]earners?|disposable income|earning power)\b",
+            re.I,
+        ),
+    ),
+    (
+        "intent",
+        re.compile(
+            r"\b(intend(?:s|ed|ing)?|planning to (?:buy|purchase)|purchase intent|"
+            r"shopping for|ready to (?:buy|purchase)|want(?:s|ed)? to (?:buy|purchase)|"
+            r"seeking to (?:buy|purchase)|interested in (?:buying|purchasing))\b",
+            re.I,
+        ),
+    ),
+    (
+        "prediction",
+        re.compile(
+            r"\b(will|forecast(?:s|ed|ing)?|predict(?:s|ed|ion|ing)?|likely to|"
+            r"expected to|set to|poised to|going to|future demand)\b",
+            re.I,
+        ),
+    ),
+)
+
+_NUMBER_WORD = (
+    r"(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|hundred|"
+    r"thousand|million|billion|percent|\d[\d,.]*%?|doubled|tripled|halved)"
+)
+_TRAFFIC_TERM = r"(?:traffic|views?|pageviews?|visits?|attention)"
+_INVENTED_TRAFFIC = re.compile(
+    rf"(?:\b{_TRAFFIC_TERM}\b[^.!?]{{0,50}}\b{_NUMBER_WORD}\b|"
+    rf"\b{_NUMBER_WORD}\b[^.!?]{{0,50}}\b{_TRAFFIC_TERM}\b)",
+    re.I,
 )
 
 
@@ -145,16 +192,28 @@ def narrative_validation_errors(output: object) -> tuple[str, ...]:
     if schema_errors:
         return tuple(schema_errors)
     assert isinstance(output, dict)
-    text = " ".join(
-        value
-        for key, value in output.items()
-        if key != "brand_categories" and isinstance(value, str)
-    )
-    return tuple(
+    text = " ".join(_strings_in(output))
+    claim_errors = tuple(
         f"prohibited {claim} claim"
         for claim, pattern in _PROHIBITED_CLAIMS
         if pattern.search(text)
     )
+    traffic_errors = (
+        ("prohibited invented traffic claim",)
+        if _INVENTED_TRAFFIC.search(text)
+        else ()
+    )
+    return (*claim_errors, *traffic_errors)
+
+
+def _strings_in(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _strings_in(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _strings_in(item)]
+    return []
 
 
 class LangChainGroqNarrativeAdapter:

@@ -149,6 +149,7 @@ def execute_trend_portfolio_stage(
         run_id=run_id,
         configuration=configuration,
         selected=selected,
+        source_clusters=source_clusters,
     )
     total = max(len(selected), 1)
     for index in range(len(completed), len(selected)):
@@ -310,6 +311,7 @@ def _load_checkpoint(
     run_id: str,
     configuration: dict[str, object],
     selected: tuple[AudienceTrend, ...],
+    source_clusters: dict[str, dict[str, object]],
 ) -> list[dict[str, object]]:
     if not path.exists():
         return []
@@ -338,6 +340,15 @@ def _load_checkpoint(
         for index, record in enumerate(completed)
     ):
         raise V2ContractError("Trend Portfolio checkpoint provenance is invalid")
+    for trend, record in zip(selected, completed, strict=False):
+        cluster_id = trend.final_cluster_traffic.cluster_id
+        _validate_completed_record(
+            trend,
+            record,
+            source_clusters[cluster_id],
+            cast(str, configuration["model"]),
+            conflict_message="Trend Portfolio checkpoint deterministic facts conflict",
+        )
     return completed
 
 
@@ -372,25 +383,88 @@ def _validate_completed_facts(
     for trend, item, narrative_record in zip(
         selected, portfolio, evidence, strict=True
     ):
-        narrative = item["narrative"]
-        expected = _portfolio_item(trend, cast(dict[str, object], narrative))
-        attempts = cast(list[dict[str, object]], narrative_record["attempts"])
         cluster_id = trend.final_cluster_traffic.cluster_id
-        source_cluster = source_clusters[cluster_id]
+        _validate_completed_record(
+            trend,
+            {
+                "cluster_id": cluster_id,
+                "portfolio_item": item,
+                "evidence": narrative_record,
+            },
+            source_clusters[cluster_id],
+            cast(str, cast(dict[str, object], payload["configuration"])["model"]),
+            conflict_message="completed Trend Portfolio deterministic facts conflict",
+        )
+
+
+def _validate_completed_record(
+    trend: AudienceTrend,
+    record: dict[str, object],
+    source_cluster: dict[str, object],
+    model: str,
+    *,
+    conflict_message: str,
+) -> None:
+    if set(record) != {"cluster_id", "portfolio_item", "evidence"}:
+        raise V2ContractError(conflict_message)
+    item = record["portfolio_item"]
+    evidence = record["evidence"]
+    if not isinstance(item, dict) or not isinstance(evidence, dict):
+        raise V2ContractError(conflict_message)
+    narrative = item.get("narrative")
+    cluster_id = trend.final_cluster_traffic.cluster_id
+    members = source_cluster.get("members")
+    if not isinstance(narrative, dict) or not isinstance(members, list):
+        raise V2ContractError(conflict_message)
+    expected_item = _portfolio_item(trend, narrative)
+    expected_input = _model_evidence(
+        trend,
+        cast(list[dict[str, object]], members),
+    )
+    attempts = evidence.get("attempts")
+    if (
+        record["cluster_id"] != cluster_id
+        or item != expected_item
+        or narrative_validation_errors(narrative)
+        or set(evidence)
+        != {"cluster_id", "prompt", "model_input", "model", "attempts"}
+        or evidence["cluster_id"] != cluster_id
+        or evidence["prompt"] != NARRATIVE_PROMPT
+        or evidence["model_input"] != expected_input
+        or evidence["model"] != model
+        or not _attempts_are_consistent(attempts, narrative)
+    ):
+        raise V2ContractError(conflict_message)
+
+
+def _attempts_are_consistent(attempts: object, narrative: dict[str, object]) -> bool:
+    if not isinstance(attempts, list) or not 1 <= len(attempts) <= 3:
+        return False
+    for number, attempt in enumerate(attempts, start=1):
         if (
-            item != expected
-            or narrative_validation_errors(narrative)
-            or narrative_record["cluster_id"] != item["cluster_id"]
-            or narrative_record["model_input"]
-            != _model_evidence(
-                trend,
-                cast(list[dict[str, object]], source_cluster["members"]),
-            )
-            or not attempts
-            or attempts[-1]["validation_status"] != "valid"
-            or attempts[-1]["output"] != narrative
+            not isinstance(attempt, dict)
+            or set(attempt)
+            != {"attempt", "delivery_status", "validation_status", "output", "errors"}
+            or attempt["attempt"] != number
+            or not isinstance(attempt["errors"], list)
+            or any(not isinstance(error, str) for error in attempt["errors"])
         ):
-            raise V2ContractError("completed Trend Portfolio deterministic facts conflict")
+            return False
+        delivery = attempt["delivery_status"]
+        validation = attempt["validation_status"]
+        errors = attempt["errors"]
+        if delivery == "error":
+            if validation != "not_run" or attempt["output"] is not None or not errors:
+                return False
+        elif delivery == "delivered" and validation == "invalid":
+            if not errors:
+                return False
+        elif delivery == "delivered" and validation == "valid":
+            if errors or number != len(attempts) or attempt["output"] != narrative:
+                return False
+        else:
+            return False
+    return cast(dict[str, object], attempts[-1])["validation_status"] == "valid"
 
 
 def _package_version(package: str) -> str:
