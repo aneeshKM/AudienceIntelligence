@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed. This ADR records the design to implement after the V2 research and
-live API experiments are complete.
+Accepted. This ADR defines the supported product architecture. The former V1
+implementation was retired after the complete V2 pipeline and UI were verified.
 
 ## Context
 
@@ -116,8 +116,9 @@ merging, and uncertain-trend display are deferred.
   must default to loopback and validate run identifiers and CLI arguments.
 - The result is less replayable than V1 because raw content, singleton records,
   embeddings, and full pairwise matrices are intentionally not retained.
-- V1 implementation and documentation remain historical references until V2 is
-  implemented and becomes the active README contract.
+- V1 research and ADR-0001 remain historical records only; the V1
+  implementation, schemas, CLI, fixtures, tests, and active documentation are
+  retired.
 
 ## Rejected alternatives
 

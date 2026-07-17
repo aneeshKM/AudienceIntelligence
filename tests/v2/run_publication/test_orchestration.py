@@ -27,7 +27,6 @@ def global_cli_arguments(
         sys.executable,
         "-m",
         "audience_trend_miner",
-        "v2-run",
         "--run-id",
         run_id,
         "--as-of",

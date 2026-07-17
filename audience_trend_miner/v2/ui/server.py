@@ -194,7 +194,6 @@ class _RunSupervisor:
                 )
             command = [
                 *self._cli_command,
-                "v2-run",
                 "--run-id",
                 request.run_id,
                 "--as-of",

@@ -1,5 +1,9 @@
 # V2 Semantic Formation Threshold and Subdivision Policy
 
+> Status: Historical V2 research record supporting the active ADR-0002
+> production threshold. References to V1 are experimental comparisons, not
+> supported application behavior.
+
 ## Decision
 
 V2 production Semantic Audience Formation uses an inclusive Combined

@@ -26,15 +26,7 @@ def main() -> int:
         return _trend_portfolio_main(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "v2-run-publication":
         return _run_publication_main(sys.argv[2:])
-    parser = argparse.ArgumentParser(prog="audience-trend-miner")
-    parser.add_argument("--as-of", type=date.fromisoformat, required=False)
-    parser.add_argument("--output-dir", type=Path, default=Path("runs"))
-    parser.add_argument("--run-id", required=False)
-    arguments = parser.parse_args()
-    from audience_trend_miner.run import execute_run
-
-    execute_run(arguments.as_of, arguments.output_dir, run_id=arguments.run_id)
-    return 0
+    return _v2_run_main(sys.argv[1:])
 
 
 def _v2_ui_main(arguments: list[str]) -> int:
@@ -97,7 +89,7 @@ def _v2_run_main(arguments: list[str]) -> int:
         except ValueError as error:
             raise argparse.ArgumentTypeError(str(error)) from error
 
-    parser = argparse.ArgumentParser(prog="audience-trend-miner v2-run")
+    parser = argparse.ArgumentParser(prog="audience-trend-miner")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--as-of", type=date.fromisoformat, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)

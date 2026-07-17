@@ -1,14 +1,11 @@
 # AudienceIntelligence
 
-Audience Trend Miner turns public attention signals into an Emerging Audience
-Portfolio. A run discovers the complete current-window candidate universe from
-English Wikipedia, retrieves exact traffic across both analysis windows, and
-canonicalizes aliases without fabricating audiences.
-It then applies auditable traffic, growth, and trend-score gates and removes only
-explicit technical or navigational noise. Qualified articles then pass through a
-strict, fail-closed commercial-relevance and brand-safety judgment before they
-remain attention signals for later clustering; the CLI does not present them as
-audiences.
+Audience Trend Miner builds a country-specific Audience Portfolio from public
+attention signals. The supported application is the V2 cluster-first pipeline:
+it groups canonical English Wikipedia pages semantically, adjudicates each
+preliminary cluster for commercial meaning and brand safety, attaches censored
+United States traffic after membership is final, and publishes robust growing
+and shrinking audience trends.
 
 ## Install on macOS
 
@@ -22,59 +19,82 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-## Run
-
-Supply an analysis date for a reproducible run:
+Production runs require PostgreSQL-backed Wikimedia Evidence Jobs and Groq:
 
 ```bash
-audience-trend-miner --as-of 2026-07-16 --output-dir runs
+export DATABASE_URL=postgresql://localhost/audience_intelligence
+export GROQ_API_KEY=your-real-key
 ```
 
-Run the complete V2 pipeline with a stable identifier:
+## Run the pipeline
+
+The default CLI runs Wikimedia Evidence, Semantic Audience Formation, Cluster
+Adjudication, Trend Portfolio, and Run Publication in dependency order:
 
 ```bash
-audience-trend-miner v2-run \
-  --run-id july-16-v2 \
+audience-trend-miner \
+  --run-id july-16 \
   --as-of 2026-07-16 \
   --output-dir runs \
-  --progress-format json
+  --progress-format human
 ```
 
-The V2 command invokes Wikimedia Evidence, Semantic Audience Formation,
-Cluster Adjudication, Trend Portfolio, and Run Publication in dependency order.
-Reusing the same compatible arguments and `run_id` resumes completed module
-artifacts; configuration drift fails closed. JSON progress is flushed event by
-event for streaming consumers. Production runs require `DATABASE_URL` and
-`GROQ_API_KEY`; each external boundary also has a fixture option for deterministic
-integration runs.
+The As-of Date anchors two adjacent seven-day Nominal Windows ending two days
+before it. Reusing the same run ID and compatible arguments resumes completed
+stage artifacts; configuration drift fails closed. Use
+`--progress-format json` for a flushed, schema-versioned event stream.
 
-Start the local V2 run server on loopback (the default is
-`http://127.0.0.1:8000`):
+Each run lives under `runs/<run-id>/`. Run Publication atomically exposes only:
+
+- `publication/portfolio.json` — the UI-facing Audience Portfolio
+- `publication/audit.json` — membership, trend, narrative, and integrity evidence
+- `publication/manifest.json` — run identity, dates, coverage, and artifact hashes
+
+No static HTML report is produced. The interactive UI renders
+`portfolio.json` after validating the complete publication contract.
+
+The five stage commands remain available for manual recovery and experiments:
+`v2-wikimedia-evidence`, `v2-semantic-audience-formation`,
+`v2-cluster-adjudication`, `v2-trend-portfolio`, and `v2-run-publication`.
+
+## Run the interactive UI
+
+Start the loopback FastAPI server (default `http://127.0.0.1:8000`):
 
 ```bash
 audience-trend-miner v2-ui --output-dir runs
 ```
 
-`POST /api/runs` accepts an ISO As-of Date and safe run ID, starts the installed
-global V2 CLI, and returns immediately. `GET /api/runs/{run_id}` reports the
-server-owned process state after browser navigation or disconnection. A run is
-successful only when the CLI exits cleanly and the same run has a complete,
-schema-valid, integrity-checked Run Publication contract.
+The browser starts or resumes the default global CLI with a stable run ID. The
+backend owns the subprocess independently of the browser connection, records
+validated progress before delivery, and replays only missing event sequences
+after reconnect. A confirmed cancellation terminates only that run's owned
+subprocess and retains artifacts and event history. Failed or cancelled runs can
+resume with the same ID.
 
-`WS /api/runs/{run_id}/events?after_sequence=N` streams each validated JSON
-progress event as the CLI flushes it. The server durably records events before
-delivery, so reconnecting with the last received sequence replays only the
-missing suffix and then continues with live events. This history remains
-available after a server restart.
+## Configuration
 
-Failed runs can be submitted again with the same run ID; the global CLI resumes
-completed modules while the UI appends new events to the existing history.
-`POST /api/runs/{run_id}/cancel` requires `{"confirmed": true}`, terminates only
-the subprocess owned for that run, records a durable `cancelled` state, and keeps
-all run artifacts. Run state is persisted under the confined output root so a
-restarted backend can expose the prior terminal state and offer resume.
+Copy `.env.example` to `.env` for local values. Exported shell values take
+precedence. Important settings include:
 
-The browser workflow tests require Playwright and its Chromium runtime:
+- `DATABASE_URL` and `GROQ_API_KEY`
+- `AUDIENCE_TREND_MINER_EMBEDDING_MODEL` and
+  `AUDIENCE_TREND_MINER_EMBEDDING_BATCH_SIZE`
+- `AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD` (selected production value `0.76`)
+- `AUDIENCE_TREND_MINER_MAX_LLM_CLUSTERS` (default `10`, or `all`)
+- `AUDIENCE_TREND_MINER_CLUSTER_MODEL` and
+  `AUDIENCE_TREND_MINER_NARRATIVE_MODEL`
+
+The global command also accepts fixture files at each external boundary for a
+deterministic integration run. Run `audience-trend-miner --help` for all options.
+
+## Test
+
+```bash
+python3 -m unittest discover -v
+```
+
+Browser workflow tests additionally require Playwright and Chromium:
 
 ```bash
 python3 -m pip install -e '.[browser-test]'
@@ -82,140 +102,13 @@ python3 -m playwright install chromium
 python3 -m unittest tests.v2.ui.test_browser
 ```
 
-Use a stable run identifier to resume interrupted Wikimedia work without
-refetching completed evidence:
+Tests mirror the five module boundaries under `tests/v2/` and cover schema
+contracts, installed-package assets, global orchestration and resume, structured
+publication, and the interactive UI workflow.
 
-```bash
-audience-trend-miner --as-of 2026-07-16 --run-id july-16 --output-dir runs
-```
+## Architecture history
 
-`--as-of` defaults to the current UTC date. Each invocation creates a
-timestamped directory containing:
-
-- `manifest.json` — supplied and effective dates plus resolved windows
-- `portfolio.json` — schema-valid Emerging Audience Portfolio
-- `report.html` — static report, including a valid empty state
-- `audit.json` — run status, decisions, and failures
-- `wikimedia/` — saved discovery, Pageviews, metadata, and canonical artifacts
-- `classification/article_judgments.json` — prompts, raw model outputs,
-  validation results, decisions, and complete attempt histories (when articles
-  reach classification)
-- `clustering/candidate_clusters.json` — semantic representations, embeddings,
-  pairwise cosine values, graph edges, and connected-component membership
-- `clustering/refinement.json` — validate/split/reject decisions, exclusive
-  accepted membership, alternatives, rejected singletons, retry attempts, and
-  independent cluster-level safety vetoes
-
-Run Publication is atomic: artifacts are assembled and validated before being
-staged, and the timestamped directory appears only after every file is complete.
-Publication failures leave no partial run directory.
-
-Partially successful runs remain publishable and use `status: "degraded"` in
-the manifest, audit, and portfolio. Each records the failure count and reasons,
-and the HTML report displays the same degradation notice while unaffected
-articles and clusters continue through the pipeline.
-
-Discovery uses Wikimedia's public APIs by default. If any daily top-page
-response is still unavailable after three attempts, the command exits without
-creating a partial run directory.
-
-Wikimedia discovery, Pageviews, and metadata fetching use leased, idempotent
-PostgreSQL Evidence Jobs. Set `DATABASE_URL` to the PostgreSQL database used for
-run state and raw `JSONB` evidence. After every Candidate Universe alias reaches
-a terminal fetching state, deterministic transformation runs synchronously in
-memory to form Alias Traffic and Canonical Articles. Interrupted transformation
-is safely replayed from the persisted fetched evidence.
-
-Deterministic integration runs can select the fixture adapter with
-`AUDIENCE_TREND_MINER_WIKIMEDIA_FIXTURE=/path/to/fixture.json`. The fixture is
-one logical dataset containing `discovery`, `pageviews`, and `metadata`; it does
-not reproduce Wikimedia URL paths.
-
-The current and previous analysis windows are complete seven-day periods. The
-current window ends two days before the effective as-of date.
-
-Article classification calls Groq directly. Set `GROQ_API_KEY` for production
-runs. The default model is `openai/gpt-oss-120b`; override it with
-`AUDIENCE_TREND_MINER_MODEL`. Deterministic integration runs can instead set
-`AUDIENCE_TREND_MINER_CLASSIFICATION_FIXTURE` to a JSON file containing a
-`responses` array. Invalid output and request failures are retried three total
-times with exponential backoff and jitter, then rejected with their evidence
-preserved in the audit.
-
-Surviving classified signals are embedded locally exactly once using
-`sentence-transformers/all-mpnet-base-v2`. Override the model with
-`AUDIENCE_TREND_MINER_EMBEDDING_MODEL` or the inclusive graph-edge threshold
-with `AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD` (default `0.62`). Connected
-components are candidate clusters only. Multi-article components receive a
-schema-valid validate, split, or reject decision followed by a separate safety
-veto; singleton components remain auditable standalone signals. Refined
-audiences remain outside `portfolio.json` until the later scoring and portfolio
-assembly stages.
-
-V2 Semantic Audience Formation runs local Sentence Transformer inference when
-`v2-semantic-audience-formation` receives `--similarity-threshold`. It defaults
-to `sentence-transformers/all-mpnet-base-v2` with batches of 32. Override these
-with `--embedding-model` and `--embedding-batch-size`, or with
-`AUDIENCE_TREND_MINER_EMBEDDING_MODEL` and
-`AUDIENCE_TREND_MINER_EMBEDDING_BATCH_SIZE`. For example:
-
-```bash
-python -m audience_trend_miner v2-semantic-audience-formation \
-  --run-id example-run \
-  --output-dir runs \
-  --similarity-threshold 0.5 \
-  --review-cap 10
-```
-
-Inference is batched and similarity is vectorized in memory. Raw embedding
-vectors and the complete pairwise similarity matrix are not included in stage
-artifacts or progress logs.
-
-The selected production Combined Similarity threshold is `0.76`; configure it
-with `AUDIENCE_TREND_MINER_SIMILARITY_THRESHOLD=0.76` or pass the equivalent CLI
-option. Preliminary Clusters whose adjudication evidence exceeds the
-16,384-token input guard are subdivided within their existing component by
-raising the semantic boundary in deterministic `0.02` steps. Input size uses a
-conservative UTF-8-byte token upper bound with 2,048 tokens reserved for the
-fixed adjudication prompt. Members are never truncated or moved across an
-original connected-component boundary. See the
-[production threshold experiment](docs/research/semantic-formation-threshold.md)
-for the evidence and rationale.
-
-After cohesion ranking, the stage selects at most ten Preliminary Clusters by
-default. Set `AUDIENCE_TREND_MINER_MAX_LLM_CLUSTERS` or pass
-`--review-cap` with a positive integer; use `all` for an uncapped
-experiment. The validated `semantic-audience-formation.json` artifact records
-the cap and selection, singleton, omission, and subdivision counts while
-excluding traffic, embeddings, and the complete similarity matrix. Publication
-is atomic, and a completed artifact with the same formation configuration is
-resumed without repeating embedding inference.
-
-For local development, copy `.env.example` to `.env` and set both values there:
-
-```dotenv
-GROQ_API_KEY=your-real-key
-AUDIENCE_TREND_MINER_MODEL=openai/gpt-oss-120b
-DATABASE_URL=postgresql://localhost/audience_intelligence
-```
-
-The `.env` file is ignored by Git. Values exported in the shell take precedence,
-and the global `DEFAULT_MODEL` in `configuration.py` remains the final fallback.
-
-## Test
-
-```bash
-python -m unittest discover -v
-```
-
-Publication tests exercise the complete artifact contract and atomic failure
-behavior through the Run Publication interface. Focused CLI subprocess tests
-cover argument and date wiring, adapter selection, and Candidate Universe aborts.
-
-The frozen V1 evaluation set lives at
-`tests/fixtures/v1_quality_evaluation.json`. `audience_trend_miner.quality`
-matches produced decisions to its editor labels and enforces the 80%
-commercial-relevance threshold, cluster coherence and safety gates, and
-four-of-five top-audience approval gate with recorded reviewer provenance.
-The same module independently verifies exact Size Index allocation and complete
-alias-to-final-membership lineage in published audit data.
+[ADR-0002](docs/adr/0002-audience-intelligence-v2-cluster-first-country-trends.md)
+defines the active product architecture. ADR-0001 and the V1 research records
+are retained only as historical evidence; they do not describe supported code or
+CLI behavior.

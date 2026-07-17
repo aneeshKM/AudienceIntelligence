@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 import json
 from pathlib import Path
 from threading import Lock
-from typing import Mapping, Protocol
+from typing import Any, Mapping, Protocol, cast
 
 import jsonschema
 
@@ -23,8 +23,6 @@ from audience_trend_miner.v2.wikimedia_evidence.adapters import (
     HttpWikimediaAdapter,
     WikimediaPermanentError,
 )
-from audience_trend_miner.trends import deterministic_exclusion_reason
-
 from audience_trend_miner.v2.shared import (
     ARTIFACT_SCHEMA_VERSION,
     BoundedProgress,
@@ -44,6 +42,34 @@ from audience_trend_miner.v2.shared import (
 STAGE = "wikimedia-evidence"
 MINIMUM_SUCCESSFUL_DAYS = 4
 SCHEMA_PATH = Path(__file__).with_name("schemas") / "wikimedia-evidence.schema.json"
+TECHNICAL_NAMESPACES = frozenset(
+    {
+        "category",
+        "draft",
+        "file",
+        "help",
+        "media",
+        "mediawiki",
+        "module",
+        "portal",
+        "special",
+        "template",
+        "timedtext",
+        "user",
+        "user talk",
+        "wikipedia",
+    }
+)
+
+
+def deterministic_exclusion_reason(title: str) -> str | None:
+    normalized = title.replace("_", " ").strip()
+    if normalized.casefold() == "main page":
+        return "main_page"
+    namespace, separator, _ = normalized.partition(":")
+    if separator and namespace.casefold() in TECHNICAL_NAMESPACES:
+        return f"technical_namespace:{namespace.casefold()}"
+    return None
 
 
 class CountryTopPagesAdapter(Protocol):
@@ -361,7 +387,7 @@ def execute_wikimedia_evidence_fixture(
             progress_sink=progress_sink,
         )
 
-    daily_responses = fixture["daily_responses"]
+    daily_responses = cast(dict[str, object], fixture["daily_responses"])
     nominal_days: list[dict[str, object]] = []
     daily_cutoffs: list[dict[str, object]] = []
     candidate_titles: set[str] = set()
@@ -526,7 +552,7 @@ def _canonicalize(
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     if not isinstance(canonical_facts, dict):
         raise V2ContractError("fixture canonical_pages are invalid")
-    grouped: dict[int, dict[str, object]] = {}
+    grouped: dict[int, dict[str, Any]] = {}
     unavailable = 0
     main_page = 0
     internal_namespaces: dict[str, int] = {}

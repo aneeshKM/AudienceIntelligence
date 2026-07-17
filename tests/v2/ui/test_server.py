@@ -489,7 +489,6 @@ class RunServerTest(unittest.TestCase):
             self.assertEqual(
                 json.loads(invocation_path.read_text(encoding="utf-8")),
                 [
-                    "v2-run",
                     "--run-id",
                     "safe-run",
                     "--as-of",

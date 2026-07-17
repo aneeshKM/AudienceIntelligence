@@ -1,5 +1,9 @@
 # MediaWiki production source contract
 
+> Status: Historical V2 research record. The selected Action API contract is
+> implemented in the active V2 Wikimedia Evidence module; the one-off comparison
+> command used to collect this evidence was retired with V1 tooling.
+
 ## Decision
 
 Use the English Wikipedia MediaWiki Action API for canonical identity and
@@ -46,14 +50,8 @@ traffic facts required by its artifact schema.
 
 ## Live comparison
 
-Run the bounded experiment (it emits summaries only):
-
-```bash
-python -m audience_trend_miner.mediawiki_source_contract
-python -m audience_trend_miner.mediawiki_source_contract --category-limit 10
-```
-
-On 2026-07-17 UTC it queried `USA`, `Barack Obama`, and a deliberately missing
+The retired bounded experiment emitted summaries only. On 2026-07-17 UTC it
+queried `USA`, `Barack Obama`, and a deliberately missing
 title, plus United States country traffic for 2025-07-15. The timings are one
 sample and are evidence about request shape, not an availability SLA.
 
