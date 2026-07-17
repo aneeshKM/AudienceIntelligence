@@ -79,6 +79,10 @@ def _wikimedia_evidence_main(arguments: list[str]) -> int:
 def _semantic_audience_formation_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2.semantic_audience_formation import (
         execute_category_selection,
+        execute_preliminary_clustering,
+    )
+    from audience_trend_miner.v2.semantic_audience_formation.embeddings import (
+        FrozenEmbeddingAdapter,
     )
 
     parser = argparse.ArgumentParser(
@@ -87,9 +91,28 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--wikimedia-evidence", type=Path)
+    parser.add_argument("--embedding-fixture", type=Path)
+    parser.add_argument("--similarity-threshold", type=float)
     parser.add_argument("--progress-format", choices=("human", "json"), default="human")
     parsed = parser.parse_args(arguments)
     sink = _v2_progress_sink(parsed.progress_format)
+    if parsed.embedding_fixture is not None:
+        if parsed.similarity_threshold is None:
+            parser.error("--similarity-threshold is required with --embedding-fixture")
+        return _execute_v2(
+            lambda: execute_preliminary_clustering(
+                run_id=parsed.run_id,
+                output_root=parsed.output_dir,
+                wikimedia_evidence_path=parsed.wikimedia_evidence,
+                embedding_adapter=FrozenEmbeddingAdapter.from_file(
+                    parsed.embedding_fixture
+                ),
+                threshold=parsed.similarity_threshold,
+                progress_sink=sink,
+            )
+        )
+    if parsed.similarity_threshold is not None:
+        parser.error("--similarity-threshold requires --embedding-fixture")
     return _execute_v2(
         lambda: execute_category_selection(
             run_id=parsed.run_id,

@@ -8,6 +8,11 @@ from audience_trend_miner.v2.semantic_audience_formation.categories import (
     CategorySelection,
     select_categories,
 )
+from audience_trend_miner.v2.semantic_audience_formation.clustering import (
+    EmbeddingAdapter,
+    PreliminaryClusterArtifact,
+    form_preliminary_clusters,
+)
 from audience_trend_miner.v2.shared import BoundedProgress, ProgressEvent, ProgressSink
 from audience_trend_miner.v2.wikimedia_evidence import consume_wikimedia_evidence
 
@@ -49,3 +54,41 @@ def execute_category_selection(
         )
     )
     return selection
+
+
+def execute_preliminary_clustering(
+    *,
+    run_id: str,
+    output_root: Path,
+    progress_sink: ProgressSink,
+    embedding_adapter: EmbeddingAdapter,
+    threshold: float,
+    wikimedia_evidence_path: Path | None = None,
+) -> PreliminaryClusterArtifact:
+    """Select semantic evidence and form fixture- or production-backed clusters."""
+    selection = execute_category_selection(
+        run_id=run_id,
+        output_root=output_root,
+        progress_sink=progress_sink,
+        wikimedia_evidence_path=wikimedia_evidence_path,
+    )
+    result = form_preliminary_clusters(
+        selection.pages, embedding_adapter, threshold=threshold
+    )
+    page_count = len(selection.pages)
+    progress_sink(
+        ProgressEvent(
+            run_id=run_id,
+            sequence=2,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            module=STAGE,
+            operation="form-preliminary-clusters",
+            level="info",
+            message=(
+                f"formed {len(result.preliminary_clusters)} Preliminary Clusters; "
+                f"discarded {result.singleton_count} singleton components"
+            ),
+            progress=BoundedProgress(page_count, max(page_count, 1)),
+        )
+    )
+    return result

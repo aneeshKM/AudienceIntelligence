@@ -7,6 +7,7 @@ from audience_trend_miner.v2.semantic_audience_formation.categories import (
 )
 from audience_trend_miner.v2.semantic_audience_formation.stage import (
     execute_category_selection,
+    execute_preliminary_clustering,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "SelectedCategoryPage",
     "select_categories",
     "execute_category_selection",
+    "execute_preliminary_clustering",
 ]

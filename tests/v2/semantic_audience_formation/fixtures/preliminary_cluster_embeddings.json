@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "model": "deterministic-fixture",
+  "embeddings": {
+    "Title: Alpha One\nLead: alpha one lead.": [1, 0, 0, 0, 0, 0],
+    "Title: Alpha Two\nLead: alpha two lead.": [1, 0, 0, 0, 0, 0],
+    "Title: Alpha Three\nLead: alpha three lead.": [1, 0, 0, 0, 0, 0],
+    "Title: Beta One\nLead: beta one lead.": [0, 1, 0, 0, 0, 0],
+    "Title: Beta Two\nLead: beta two lead.": [0, 1, 0, 0, 0, 0],
+    "Title: Gamma One\nLead: gamma one lead.": [0, 0, 1, 0, 0, 0],
+    "Title: Gamma Two\nLead: gamma two lead.": [0, 0, 1, 0, 0, 0],
+    "Title: Boundary One\nLead: boundary one lead.": [0, 0, 0, 1, 0, 0],
+    "Title: Boundary Two\nLead: boundary two lead.": [0, 0, 0, 0, 1, 0],
+    "Title: Singleton\nLead: singleton lead.": [0, 0, 0, 0, 0, 1],
+    "Title: Canonical A\nLead: A long canonical lead used for semantic evidence.": [1, 0],
+    "Title: Canonical B\nLead: A second lead.": [0, 1],
+    "Selected Categories: Alpha": [1, 0, 0, 0, 0, 0],
+    "Selected Categories: Beta": [0, 1, 0, 0, 0, 0],
+    "Selected Categories: Gamma": [0, 0, 1, 0, 0, 0],
+    "Selected Categories: Boundary": [0, 0, 0, 1, 0, 0],
+    "Selected Categories: Isolated": [0, 0, 0, 0, 0, 1],
+    "Selected Categories: Useful | Visible": [1, 0],
+    "Selected Categories: Other": [1, 0]
+  }
+}

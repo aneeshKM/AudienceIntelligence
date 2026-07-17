@@ -9,22 +9,40 @@ from pathlib import Path
 
 
 WIKIMEDIA_FIXTURE = Path(__file__).parents[1] / "fixtures" / "v2_wikimedia_evidence.json"
+EMBEDDING_FIXTURE = (
+    Path(__file__).with_name("fixtures") / "preliminary_cluster_embeddings.json"
+)
 
 
-def run_stage(output_dir: Path, run_id: str = "formation-run") -> subprocess.CompletedProcess[str]:
+def run_stage(
+    output_dir: Path,
+    run_id: str = "formation-run",
+    *,
+    embedding_fixture: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    arguments = [
+        sys.executable,
+        "-m",
+        "audience_trend_miner",
+        "v2-semantic-audience-formation",
+        "--run-id",
+        run_id,
+        "--output-dir",
+        str(output_dir),
+        "--progress-format",
+        "json",
+    ]
+    if embedding_fixture is not None:
+        arguments.extend(
+            [
+                "--embedding-fixture",
+                str(embedding_fixture),
+                "--similarity-threshold",
+                "0.3",
+            ]
+        )
     return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "audience_trend_miner",
-            "v2-semantic-audience-formation",
-            "--run-id",
-            run_id,
-            "--output-dir",
-            str(output_dir),
-            "--progress-format",
-            "json",
-        ],
+        arguments,
         check=False,
         capture_output=True,
         text=True,
@@ -57,6 +75,22 @@ def publish_wikimedia_evidence(output_dir: Path, run_id: str = "formation-run") 
 
 
 class SemanticAudienceFormationStageTest(unittest.TestCase):
+    def test_stage_forms_fixture_backed_preliminary_clusters(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            publish_wikimedia_evidence(output_dir)
+
+            completed = run_stage(output_dir, embedding_fixture=EMBEDDING_FIXTURE)
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            events = [json.loads(line) for line in completed.stdout.splitlines()]
+            self.assertEqual(
+                [event["operation"] for event in events],
+                ["select-categories", "form-preliminary-clusters"],
+            )
+            self.assertIn("formed 1 Preliminary Clusters", events[1]["message"])
+            self.assertIn("discarded 0 singleton components", events[1]["message"])
+
     def test_stage_consumes_completed_wikimedia_evidence_without_reacquisition(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)
