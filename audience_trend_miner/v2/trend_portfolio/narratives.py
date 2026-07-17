@@ -16,47 +16,33 @@ DEFAULT_NARRATIVE_MODEL = "openai/gpt-oss-120b"
 MAX_NARRATIVE_ATTEMPTS = 3
 NARRATIVE_PROMPT = """You write bounded commercial copy for one selected audience trend. Use only the supplied evidence. Return exactly the six requested fields. Do not return or alter direction, traffic, percentage change, coverage, confidence, or Impact Score. Do not claim causation, reader identity, income, intent, prediction, or future behavior. Do not provide hidden reasoning or chain-of-thought."""
 
-NARRATIVE_SCHEMA: dict[str, object] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": [
-        "name",
-        "summary",
-        "commercial_interpretation",
-        "brand_categories",
-        "buying_power_rating",
-        "buying_power_rationale",
-    ],
-    "properties": {
-        "name": {"type": "string", "minLength": 1},
-        "summary": {"type": "string", "minLength": 1},
-        "commercial_interpretation": {"type": "string", "minLength": 1},
-        "brand_categories": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 10,
-            "uniqueItems": True,
-            "items": {"type": "string", "minLength": 1},
-        },
-        "buying_power_rating": {"enum": ["high", "medium", "low"]},
-        "buying_power_rationale": {"type": "string", "minLength": 1},
-    },
-}
+_PORTFOLIO_SCHEMA_PATH = (
+    Path(__file__).with_name("schemas") / "trend-portfolio.schema.json"
+)
+_PORTFOLIO_SCHEMA = json.loads(_PORTFOLIO_SCHEMA_PATH.read_text(encoding="utf-8"))
+NARRATIVE_SCHEMA = cast(
+    dict[str, object],
+    _PORTFOLIO_SCHEMA["$defs"]["narrative"],
+)
 
 _PROHIBITED_CLAIMS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "causation",
         re.compile(
             r"\b(caus(?:e|ed|es|ing)|because of|due to|led to|resulted in|"
-            r"driv(?:e|es|en|ing)|prompt(?:s|ed|ing)|trigger(?:s|ed|ing)|explains?)\b",
+            r"driv(?:e|es|en|ing)|prompt(?:s|ed|ing)|trigger(?:s|ed|ing)|explains?|"
+            r"spurr(?:ed|ing|s)|fuel(?:s|ed|ing)|spark(?:s|ed|ing)|attributable to|"
+            r"stems? from|owing to)\b",
             re.I,
         ),
     ),
     (
         "reader identity",
         re.compile(
-            r"\b(readers?|viewers?|users?|homeowners?|shoppers?|buyers?|fans?|"
-            r"enthusiasts?)\b|\baudience\s+(?:consists?|comprises?|is|are)\b",
+            r"\b(readers?|viewers?|users?|homeowners?|shoppers?|buyers?|purchasers?|"
+            r"consumers|fans?|enthusiasts?)\b|"
+            r"\b(?:people|individuals?|households?)\s+(?:are|who|with|seeking|planning)\b|"
+            r"\baudience\s+(?:consists?|comprises?|is|are)\b",
             re.I,
         ),
     ),
@@ -64,7 +50,8 @@ _PROHIBITED_CLAIMS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "income",
         re.compile(
             r"\b(income|salary|wealthy|affluent|high[- ]net[- ]worth|"
-            r"high[- ]earners?|low[- ]earners?|disposable income|earning power)\b",
+            r"high[- ]earners?|low[- ]earners?|disposable income|earning power|"
+            r"prosperous|well[- ]off|upper[- ]income)\b",
             re.I,
         ),
     ),
@@ -73,7 +60,9 @@ _PROHIBITED_CLAIMS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"\b(intend(?:s|ed|ing)?|planning to (?:buy|purchase)|purchase intent|"
             r"shopping for|ready to (?:buy|purchase)|want(?:s|ed)? to (?:buy|purchase)|"
-            r"seeking to (?:buy|purchase)|interested in (?:buying|purchasing))\b",
+            r"seek(?:s|ing)? to (?:buy|purchase|acquire)|"
+            r"aim(?:s|ed|ing)? to (?:buy|purchase|acquire)|looking to (?:buy|purchase)|"
+            r"interested in (?:buying|purchasing))\b",
             re.I,
         ),
     ),
@@ -81,7 +70,8 @@ _PROHIBITED_CLAIMS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "prediction",
         re.compile(
             r"\b(will|forecast(?:s|ed|ing)?|predict(?:s|ed|ion|ing)?|likely to|"
-            r"expected to|set to|poised to|going to|future demand)\b",
+            r"expected to|set to|poised to|going to|future demand|anticipat(?:e|es|ed|ing)|"
+            r"(?:should|could|may|might) (?:expand|grow|increase|rise|decline|fall|contract))\b",
             re.I,
         ),
     ),
@@ -89,7 +79,9 @@ _PROHIBITED_CLAIMS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 _NUMBER_WORD = (
     r"(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|hundred|"
-    r"thousand|million|billion|percent|\d[\d,.]*%?|doubled|tripled|halved)"
+    r"thousand|million|billion|percent|\d[\d,.]*%?|doubled|tripled|halved|"
+    r"surged|soared|spiked|plummeted|collapsed|record|unprecedented|massive|"
+    r"dramatic|sharp|significant|substantial|slight|modest|high|low)"
 )
 _TRAFFIC_TERM = r"(?:traffic|views?|pageviews?|visits?|attention)"
 _INVENTED_TRAFFIC = re.compile(

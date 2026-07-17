@@ -111,17 +111,16 @@ class TrendPortfolioStageTest(unittest.TestCase):
                 {
                     **valid_first,
                     "summary": (
-                        "Demand was driven by an audience consisting of homeowners; "
-                        "high earners are ready to purchase and expected to grow."
+                        "Prosperous purchasers aim to acquire equipment; demand "
+                        "should expand, spurred by prices."
                     ),
-                    "brand_categories": ["Affluent shoppers"],
                 },
                 valid_first,
             ]
             fixture["clusters"][1]["responses"] = [
                 {
                     **valid_second,
-                    "summary": "Traffic reached two million views in the comparison.",
+                    "summary": "Pageviews surged to record levels.",
                 },
                 valid_second,
             ]
@@ -146,6 +145,11 @@ class TrendPortfolioStageTest(unittest.TestCase):
             fixture_path = root / "checkpoint.json"
             _write_valid_fixture(fixture_path)
             fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+            valid_first = fixture["clusters"][0]["responses"][0]
+            fixture["clusters"][0]["responses"] = [
+                {**valid_first, "summary": "Prices caused the change."},
+                valid_first,
+            ]
             invalid = {
                 **fixture["clusters"][1]["responses"][0],
                 "summary": "This audience will buy equipment.",
@@ -158,8 +162,7 @@ class TrendPortfolioStageTest(unittest.TestCase):
                 root / "narrative-run" / ".trend-portfolio.checkpoint.json"
             )
             checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-            checkpoint["completed"][0]["portfolio_item"]["impact_score"] = 0
-            checkpoint["completed"][0]["evidence"]["prompt"] = "tampered"
+            checkpoint["completed"][0]["evidence"]["attempts"][0]["output"] = valid_first
             checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
             _write_valid_fixture(fixture_path)
 

@@ -457,7 +457,8 @@ def _attempts_are_consistent(attempts: object, narrative: dict[str, object]) -> 
             if validation != "not_run" or attempt["output"] is not None or not errors:
                 return False
         elif delivery == "delivered" and validation == "invalid":
-            if not errors:
+            expected_errors = narrative_validation_errors(attempt["output"])
+            if not expected_errors or errors != list(expected_errors):
                 return False
         elif delivery == "delivered" and validation == "valid":
             if errors or number != len(attempts) or attempt["output"] != narrative:
