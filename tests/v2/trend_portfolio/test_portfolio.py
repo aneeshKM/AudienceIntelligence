@@ -74,21 +74,36 @@ class AudiencePortfolioTest(unittest.TestCase):
             current_minimum=99_999,
         )
 
-        portfolio = qualify_and_rank_portfolio(
-            (growing, uncertain, below_scale, shrinking)
+        malformed = _trend(
+            "malformed",
+            previous_views=1,
+            current_views=1_000_000,
+            direction="robust-ish",
         )
 
+        qualification = qualify_and_rank_portfolio(
+            (growing, uncertain, below_scale, shrinking, malformed)
+        )
+        portfolio = qualification.portfolio
+
         self.assertEqual(
-            [audience.traffic.cluster_id for audience in portfolio.audiences],
+            [
+                trend.final_cluster_traffic.cluster_id
+                for trend in portfolio.audience_trends
+            ],
             ["shrinking", "growing"],
         )
         self.assertAlmostEqual(
-            portfolio.audiences[0].impact_score,
+            portfolio.audience_trends[0].impact_score,
             math.log(400_001) * abs(math.log2(200_001 / 400_001)),
         )
         self.assertAlmostEqual(
-            portfolio.audiences[1].impact_score,
+            portfolio.audience_trends[1].impact_score,
             math.log(200_001) * abs(math.log2(200_001 / 100_001)),
+        )
+        self.assertEqual(
+            qualification.audit_cluster_traffic,
+            (growing, uncertain, below_scale, shrinking, malformed),
         )
 
     def test_caps_change_and_selects_top_ten_with_stable_ties(self) -> None:
@@ -101,19 +116,22 @@ class AudiencePortfolioTest(unittest.TestCase):
             for index in range(12, 0, -1)
         ]
 
-        portfolio = qualify_and_rank_portfolio(tied)
+        portfolio = qualify_and_rank_portfolio(tied).portfolio
 
         self.assertEqual(
-            [audience.traffic.cluster_id for audience in portfolio.audiences],
+            [
+                trend.final_cluster_traffic.cluster_id
+                for trend in portfolio.audience_trends
+            ],
             [f"cluster-{index:02d}" for index in range(1, 11)],
         )
         self.assertEqual(
-            portfolio.audiences[0].impact_score,
+            portfolio.audience_trends[0].impact_score,
             math.log(1_048_576) * 10,
         )
 
     def test_no_qualifying_cluster_produces_empty_portfolio(self) -> None:
-        portfolio = qualify_and_rank_portfolio(
+        qualification = qualify_and_rank_portfolio(
             (
                 _trend(
                     "uncertain",
@@ -129,7 +147,7 @@ class AudiencePortfolioTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(portfolio.audiences, ())
+        self.assertEqual(qualification.portfolio.audience_trends, ())
 
 
 if __name__ == "__main__":
