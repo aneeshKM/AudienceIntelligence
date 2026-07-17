@@ -82,7 +82,12 @@ def execute_wikimedia_evidence_fixture(
             ]
             non_en_wikipedia_records += len(records) - len(en_records)
             cutoff = min(
-                (int(record["views_ceil"]) for record in en_records), default=None
+                (
+                    int(record["views_ceil"])
+                    for record in records
+                    if isinstance(record, dict)
+                ),
+                default=None,
             )
             daily_cutoffs.append({"date": day_text, "views_ceil": cutoff})
             for record in en_records:
@@ -199,7 +204,20 @@ def _canonicalize(
         page["aliases"].append(alias)
         page["observations"].extend(observations_by_alias.get(alias, []))
     for page in grouped.values():
-        page["observations"].sort(key=lambda item: item["date"])
+        observations_by_date: dict[str, int] = {}
+        for observation in page["observations"]:
+            observation_date = str(observation["date"])
+            observations_by_date[observation_date] = (
+                observations_by_date.get(observation_date, 0)
+                + int(observation["views_ceil"])
+            )
+        page["observations"] = [
+            {
+                "date": observation_date,
+                "views_ceil": observations_by_date[observation_date],
+            }
+            for observation_date in sorted(observations_by_date)
+        ]
     return [grouped[page_id] for page_id in sorted(grouped)]
 
 

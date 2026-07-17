@@ -64,7 +64,7 @@ class V2WikimediaEvidenceCliTest(unittest.TestCase):
                     {"date": "2026-07-02", "views_ceil": 110},
                     {"date": "2026-07-05", "views_ceil": 130},
                     {"date": "2026-07-09", "views_ceil": 210},
-                    {"date": "2026-07-11", "views_ceil": 220},
+                    {"date": "2026-07-11", "views_ceil": 245},
                     {"date": "2026-07-15", "views_ceil": 240},
                 ],
             )
@@ -74,6 +74,11 @@ class V2WikimediaEvidenceCliTest(unittest.TestCase):
             self.assertEqual(payload["provenance"]["source"], "fixture:top-per-country/US")
             self.assertEqual(payload["completion"], {"status": "complete", "minimum_successful_days_per_window": 4})
             self.assertEqual(len(payload["daily_cutoffs"]), 10)
+            cutoffs = {
+                item["date"]: item["views_ceil"] for item in payload["daily_cutoffs"]
+            }
+            self.assertEqual(cutoffs["2026-07-02"], 90)
+            self.assertEqual(cutoffs["2026-07-06"], None)
 
     def test_stage_rejects_an_effective_window_below_minimum_coverage(self) -> None:
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
