@@ -4,6 +4,7 @@ from pathlib import Path
 import unittest
 
 from audience_trend_miner.v2.cluster_adjudication import (
+    FrozenAdjudicationAdapter,
     FrozenProposalAdapter,
     execute_cluster_adjudication,
 )
@@ -14,6 +15,221 @@ FIXTURES = Path(__file__).with_name("fixtures")
 
 
 class ClusterAdjudicationGraphTest(unittest.TestCase):
+    def test_approved_proposal_skips_revision_with_role_specific_prompts(self) -> None:
+        members = [page(101, "Air purifier"), page(102, "HEPA")]
+        adapter = FrozenAdjudicationAdapter(
+            proposal={
+                "groups": [group("Home Air Purification", [101, 102])],
+                "rejected": [],
+            },
+            critique={"approved": True, "challenges": []},
+            model="fixture/cluster-model",
+        )
+
+        result = execute_cluster_adjudication({"members": members}, adapter)
+
+        self.assertEqual(result.validation_status, "valid")
+        self.assertEqual([call.role for call in adapter.calls], ["proposer", "critic"])
+        self.assertEqual(
+            {call.model for call in adapter.calls}, {"fixture/cluster-model"}
+        )
+        self.assertNotEqual(adapter.calls[0].prompt, adapter.calls[1].prompt)
+
+    def test_challenged_proposal_receives_one_revision(self) -> None:
+        members = [
+            page(101, "Air purifier"),
+            page(102, "HEPA"),
+            page(103, "Minister for Energy"),
+        ]
+        adapter = FrozenAdjudicationAdapter(
+            proposal={
+                "groups": [group("Air Things", [101, 102])],
+                "rejected": [rejection(103)],
+            },
+            critique={
+                "approved": False,
+                "challenges": [
+                    {
+                        "dimension": "naming",
+                        "message": "The name does not identify a consumer audience.",
+                        "page_ids": [101, 102],
+                        "required_action": "revise",
+                    }
+                ],
+            },
+            revision={
+                "groups": [group("Home Air Purification", [101, 102])],
+                "rejected": [rejection(103)],
+            },
+        )
+
+        result = execute_cluster_adjudication({"members": members}, adapter).record()
+
+        self.assertEqual(
+            [call.role for call in adapter.calls],
+            ["proposer", "critic", "reviser"],
+        )
+        self.assertEqual(len({call.prompt for call in adapter.calls}), 3)
+        self.assertEqual(
+            {call.model for call in adapter.calls}, {"fixture/cluster-model"}
+        )
+        self.assertEqual(
+            result["accepted_groups"][0]["name"], "Home Air Purification"
+        )
+        self.assertEqual(
+            [member["page_id"] for member in result["rejected_members"]], [103]
+        )
+        self.assertEqual(result["validation"], {"status": "valid", "errors": []})
+
+    def test_revision_fails_closed_when_it_resurrects_an_unsafe_rejection(self) -> None:
+        members = [
+            page(101, "Air purifier"),
+            page(102, "HEPA"),
+            page(103, "Violent crime event"),
+        ]
+        adapter = FrozenAdjudicationAdapter(
+            proposal={
+                "groups": [group("Home Air Purification", [101, 102])],
+                "rejected": [rejection(103)],
+            },
+            critique={
+                "approved": False,
+                "challenges": [
+                    {
+                        "dimension": "brand_safety",
+                        "message": "The event page is unsafe for audience targeting.",
+                        "page_ids": [103],
+                        "required_action": "reject",
+                    }
+                ],
+            },
+            revision={
+                "groups": [group("Home Air and Safety News", [101, 102, 103])],
+                "rejected": [],
+            },
+        )
+
+        result = execute_cluster_adjudication({"members": members}, adapter).record()
+
+        self.assertEqual(result["accepted_groups"], [])
+        self.assertEqual(result["validation"]["status"], "invalid")
+        self.assertIn("resurrected_page_id:103", result["validation"]["errors"])
+        self.assertIn(
+            "critic_required_rejection_missing:103", result["validation"]["errors"]
+        )
+        self.assertEqual(
+            [member["page_id"] for member in result["rejected_members"]],
+            [101, 102, 103],
+        )
+
+    def test_malformed_critique_fails_closed_without_revision(self) -> None:
+        members = [page(101, "Air purifier"), page(102, "HEPA")]
+        adapter = FrozenAdjudicationAdapter(
+            proposal={
+                "groups": [group("Home Air Purification", [101, 102])],
+                "rejected": [],
+            },
+            critique={
+                "approved": False,
+                "challenges": [
+                    {
+                        "dimension": [],
+                        "message": "Malformed dimension.",
+                        "page_ids": [101],
+                        "required_action": "revise",
+                    }
+                ],
+            },
+            revision={"groups": [], "rejected": []},
+        )
+
+        result = execute_cluster_adjudication({"members": members}, adapter).record()
+
+        self.assertEqual([call.role for call in adapter.calls], ["proposer", "critic"])
+        self.assertEqual(
+            result["validation"],
+            {"status": "invalid", "errors": ["invalid_critique"]},
+        )
+        self.assertEqual(
+            [member["page_id"] for member in result["rejected_members"]], [101, 102]
+        )
+
+    def test_invalid_proposal_receives_one_revision_before_final_validation(self) -> None:
+        members = [page(101, "Air purifier"), page(102, "HEPA")]
+        adapter = FrozenAdjudicationAdapter(
+            proposal={"groups": "invalid", "rejected": []},
+            critique={"approved": True, "challenges": []},
+            revision={
+                "groups": [group("Home Air Purification", [101, 102])],
+                "rejected": [],
+            },
+        )
+
+        result = execute_cluster_adjudication({"members": members}, adapter).record()
+
+        self.assertEqual(
+            [call.role for call in adapter.calls],
+            ["proposer", "critic", "reviser"],
+        )
+        self.assertEqual(result["validation"], {"status": "valid", "errors": []})
+
+    def test_rejection_in_an_invalid_proposal_remains_terminal(self) -> None:
+        members = [
+            page(101, "Air purifier"),
+            page(102, "HEPA"),
+            page(103, "Violent crime event"),
+            page(104, "Dehumidifier"),
+        ]
+        adapter = FrozenAdjudicationAdapter(
+            proposal={
+                "groups": [group("Home Air Purification", [101, 102])],
+                "rejected": [rejection(103)],
+            },
+            critique={"approved": True, "challenges": []},
+            revision={
+                "groups": [group("Home Air Topics", [101, 102, 103, 104])],
+                "rejected": [],
+            },
+        )
+
+        result = execute_cluster_adjudication({"members": members}, adapter).record()
+
+        self.assertEqual(result["validation"]["status"], "invalid")
+        self.assertIn("resurrected_page_id:103", result["validation"]["errors"])
+
+    def test_unresolved_safety_challenge_fails_closed(self) -> None:
+        members = [
+            page(101, "Air purifier"),
+            page(102, "HEPA"),
+            page(103, "Violent crime event"),
+        ]
+        unchanged = {
+            "groups": [group("Home Air News", [101, 102, 103])],
+            "rejected": [],
+        }
+        adapter = FrozenAdjudicationAdapter(
+            proposal=unchanged,
+            critique={
+                "approved": False,
+                "challenges": [
+                    {
+                        "dimension": "brand_safety",
+                        "message": "The event page is unsafe for targeting.",
+                        "page_ids": [103],
+                        "required_action": "revise",
+                    }
+                ],
+            },
+            revision=unchanged,
+        )
+
+        result = execute_cluster_adjudication({"members": members}, adapter).record()
+
+        self.assertEqual(result["validation"]["status"], "invalid")
+        self.assertIn(
+            "critic_required_rejection_missing:103", result["validation"]["errors"]
+        )
+
     def test_keeps_a_coherent_component_using_only_allowed_page_evidence(self) -> None:
         cluster = {
             "cohesion": 0.91,

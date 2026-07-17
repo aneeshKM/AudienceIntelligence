@@ -1,17 +1,59 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Sequence
 
+from audience_trend_miner.v2.cluster_adjudication.graph import (
+    AdjudicationRequest,
+    AdjudicationRole,
+)
 from audience_trend_miner.v2.shared import V2ContractError
+
+
+@dataclass(frozen=True)
+class FrozenAdjudicationCall:
+    role: AdjudicationRole
+    prompt: str
+    model: str
+
+
+class FrozenAdjudicationAdapter:
+    """Return deterministic role outputs while recording bounded model calls."""
+
+    def __init__(
+        self,
+        proposal: object,
+        critique: object,
+        revision: object = None,
+        *,
+        model: str = "fixture/cluster-model",
+    ) -> None:
+        self.model = model
+        self._outputs = {
+            "proposer": deepcopy(proposal),
+            "critic": deepcopy(critique),
+            "reviser": deepcopy(revision),
+        }
+        self.calls: list[FrozenAdjudicationCall] = []
+
+    def invoke(self, request: AdjudicationRequest) -> object:
+        self.calls.append(
+            FrozenAdjudicationCall(
+                role=request.role,
+                prompt=request.prompt,
+                model=self.model,
+            )
+        )
+        return deepcopy(self._outputs[request.role])
 
 
 class FrozenProposalAdapter:
     """Return one deterministic proposal while recording its model-visible input."""
 
     def __init__(self, proposal: object) -> None:
+        self.model = "fixture/proposal-model"
         self._proposal = deepcopy(proposal)
         self.model_inputs: list[list[dict[str, object]]] = []
 
@@ -31,11 +73,12 @@ class FrozenProposalAdapter:
 
     def invoke(
         self,
-        model_input: Sequence[dict[str, object]],
-        config: object = None,
-        **kwargs: object,
+        request: AdjudicationRequest,
     ) -> object:
-        del config, kwargs
-        recorded = deepcopy(list(model_input))
+        if request.role == "critic":
+            return {"approved": True, "challenges": []}
+        if request.role == "reviser":
+            return deepcopy(self._proposal)
+        recorded = deepcopy(list(request.members))
         self.model_inputs.append(recorded)
         return deepcopy(self._proposal)

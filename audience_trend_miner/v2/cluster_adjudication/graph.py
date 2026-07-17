@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Protocol, Sequence, TypedDict, cast
+from enum import StrEnum
+from typing import Literal, Protocol, Sequence, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
 
@@ -15,15 +16,59 @@ ALLOWED_PAGE_FIELDS = (
     "lead",
     "selected_categories",
 )
+class CritiqueDimension(StrEnum):
+    SEMANTIC_COHERENCE = "semantic_coherence"
+    COMMERCIAL_MEANING = "commercial_meaning"
+    BRAND_SAFETY = "brand_safety"
+    NAMING = "naming"
+    EVIDENCE_SUPPORT = "evidence_support"
 
 
-class ProposalAdapter(Protocol):
-    def invoke(
-        self,
-        model_input: Sequence[dict[str, object]],
-        config: object = None,
-        **kwargs: object,
-    ) -> object: ...
+class RequiredAction(StrEnum):
+    REVISE = "revise"
+    REJECT = "reject"
+
+
+FAIL_CLOSED_DIMENSIONS = frozenset(
+    {CritiqueDimension.BRAND_SAFETY, CritiqueDimension.EVIDENCE_SUPPORT}
+)
+
+PROPOSER_PROMPT = """You are the Cluster Adjudication proposer. Use only the supplied Canonical Page evidence to form coherent, commercially meaningful, brand-safe Final Audience Clusters or reject Canonical Pages. Return decisions and concise evidence; do not provide hidden reasoning or chain-of-thought."""
+CRITIC_PROMPT = """You are the independent Cluster Adjudication critic. Check semantic coherence, commercial meaning, brand safety, naming, and evidence support. Return approval or concise structured challenges only; do not provide hidden reasoning or chain-of-thought."""
+REVISER_PROMPT = """You are the Cluster Adjudication reviser. Address the supplied validation errors and critic challenges once, without restoring rejected Canonical Pages. Return the final decisions and concise evidence; do not provide hidden reasoning or chain-of-thought."""
+
+
+AdjudicationRole = Literal["proposer", "critic", "reviser"]
+
+
+@dataclass(frozen=True)
+class AdjudicationRequest:
+    role: AdjudicationRole
+    prompt: str
+    members: tuple[dict[str, object], ...]
+    proposal: object = None
+    validation_errors: tuple[str, ...] = ()
+    critique: object = None
+
+
+@dataclass(frozen=True)
+class CritiqueChallenge:
+    dimension: CritiqueDimension
+    message: str
+    page_ids: tuple[int, ...]
+    required_action: RequiredAction
+
+
+@dataclass(frozen=True)
+class CritiqueDecision:
+    approved: bool
+    challenges: tuple[CritiqueChallenge, ...]
+
+
+class AdjudicationAdapter(Protocol):
+    model: str
+
+    def invoke(self, request: AdjudicationRequest) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -61,30 +106,239 @@ class ClusterAdjudicationResult:
 class _GraphState(TypedDict, total=False):
     members: tuple[dict[str, object], ...]
     proposal: object
+    proposal_result: ClusterAdjudicationResult
+    critique: object
+    critique_decision: CritiqueDecision | None
+    revision: object
     result: ClusterAdjudicationResult
 
 
 def execute_cluster_adjudication(
     preliminary_cluster: object,
-    proposal_adapter: ProposalAdapter,
+    adapter: AdjudicationAdapter,
 ) -> ClusterAdjudicationResult:
-    """Propose and deterministically validate one isolated Preliminary Cluster."""
+    """Adjudicate one Preliminary Cluster with bounded critique and revision."""
     members = _model_visible_members(preliminary_cluster)
 
     def propose(state: _GraphState) -> _GraphState:
-        return {"proposal": proposal_adapter.invoke(state["members"])}
+        return {
+            "proposal": adapter.invoke(
+                AdjudicationRequest(
+                    role="proposer",
+                    prompt=PROPOSER_PROMPT,
+                    members=state["members"],
+                )
+            )
+        }
 
-    def validate(state: _GraphState) -> _GraphState:
-        return {"result": _validated_result(state["members"], state["proposal"])}
+    def validate_proposal(state: _GraphState) -> _GraphState:
+        return {
+            "proposal_result": _validated_result(
+                state["members"], state["proposal"]
+            )
+        }
+
+    def critique(state: _GraphState) -> _GraphState:
+        proposal_result = state["proposal_result"]
+        model_output = adapter.invoke(
+            AdjudicationRequest(
+                role="critic",
+                prompt=CRITIC_PROMPT,
+                members=state["members"],
+                proposal=deepcopy(state["proposal"]),
+                validation_errors=proposal_result.validation_errors,
+            )
+        )
+        return {
+            "critique": model_output,
+            "critique_decision": _parse_critique(state["members"], model_output),
+        }
+
+    def after_critique(state: _GraphState) -> str:
+        decision = state["critique_decision"]
+        if decision is None:
+            return "reject"
+        if (
+            state["proposal_result"].validation_status == "valid"
+            and decision.approved
+        ):
+            return "accept"
+        return "revise"
+
+    def accept(state: _GraphState) -> _GraphState:
+        return {"result": state["proposal_result"]}
+
+    def revise(state: _GraphState) -> _GraphState:
+        proposal_result = state["proposal_result"]
+        return {
+            "revision": adapter.invoke(
+                AdjudicationRequest(
+                    role="reviser",
+                    prompt=REVISER_PROMPT,
+                    members=state["members"],
+                    proposal=deepcopy(state["proposal"]),
+                    validation_errors=proposal_result.validation_errors,
+                    critique=deepcopy(state["critique"]),
+                )
+            )
+        }
+
+    def validate_revision(state: _GraphState) -> _GraphState:
+        return {
+            "result": _validated_revision_result(
+                state["members"],
+                state["proposal"],
+                cast(CritiqueDecision, state["critique_decision"]),
+                state["revision"],
+            )
+        }
+
+    def reject_invalid_critique(state: _GraphState) -> _GraphState:
+        return {"result": _invalid_result(state["members"], ("invalid_critique",))}
 
     builder = StateGraph(_GraphState)
     builder.add_node("propose", propose)
-    builder.add_node("validate", validate)
+    builder.add_node("validate_proposal", validate_proposal)
+    builder.add_node("critique", critique)
+    builder.add_node("accept", accept)
+    builder.add_node("revise", revise)
+    builder.add_node("validate_revision", validate_revision)
+    builder.add_node("reject_invalid_critique", reject_invalid_critique)
     builder.add_edge(START, "propose")
-    builder.add_edge("propose", "validate")
-    builder.add_edge("validate", END)
+    builder.add_edge("propose", "validate_proposal")
+    builder.add_edge("validate_proposal", "critique")
+    builder.add_conditional_edges(
+        "critique",
+        after_critique,
+        {
+            "accept": "accept",
+            "revise": "revise",
+            "reject": "reject_invalid_critique",
+        },
+    )
+    builder.add_edge("accept", END)
+    builder.add_edge("revise", "validate_revision")
+    builder.add_edge("validate_revision", END)
+    builder.add_edge("reject_invalid_critique", END)
     completed = builder.compile().invoke({"members": members})
     return cast(ClusterAdjudicationResult, completed["result"])
+
+
+def _parse_critique(
+    members: tuple[dict[str, object], ...], critique: object
+) -> CritiqueDecision | None:
+    if (
+        not isinstance(critique, dict)
+        or set(critique) != {"approved", "challenges"}
+        or not isinstance(critique["approved"], bool)
+        or not isinstance(critique["challenges"], list)
+        or critique["approved"] != (not critique["challenges"])
+    ):
+        return None
+    supplied_ids = {member["page_id"] for member in members}
+    parsed_challenges: list[CritiqueChallenge] = []
+    for challenge in critique["challenges"]:
+        if not isinstance(challenge, dict) or set(challenge) != {
+            "dimension",
+            "message",
+            "page_ids",
+            "required_action",
+        }:
+            return None
+        page_ids = challenge["page_ids"]
+        dimension = challenge["dimension"]
+        required_action = challenge["required_action"]
+        try:
+            parsed_dimension = CritiqueDimension(dimension)
+            parsed_action = RequiredAction(required_action)
+        except (TypeError, ValueError):
+            return None
+        if (
+            not isinstance(challenge["message"], str)
+            or not challenge["message"].strip()
+            or not isinstance(page_ids, list)
+            or not page_ids
+            or any(
+                not isinstance(page_id, int)
+                or isinstance(page_id, bool)
+                or page_id not in supplied_ids
+                for page_id in page_ids
+            )
+            or len(page_ids) != len(set(page_ids))
+        ):
+            return None
+        parsed_challenges.append(
+            CritiqueChallenge(
+                dimension=parsed_dimension,
+                message=challenge["message"],
+                page_ids=tuple(page_ids),
+                required_action=parsed_action,
+            )
+        )
+    return CritiqueDecision(
+        approved=critique["approved"], challenges=tuple(parsed_challenges)
+    )
+
+
+def _validated_revision_result(
+    members: tuple[dict[str, object], ...],
+    proposal: object,
+    critique: CritiqueDecision,
+    revision: object,
+) -> ClusterAdjudicationResult:
+    result = _validated_result(members, revision)
+    if result.validation_status != "valid":
+        return result
+    final_rejections = {
+        cast(int, rejected["page_id"]) for rejected in result.rejected_members
+    }
+    errors: list[str] = []
+    for page_id in _explicit_rejections(members, proposal):
+        if page_id not in final_rejections:
+            errors.append(f"resurrected_page_id:{page_id}")
+    for page_id in _critic_required_rejections(critique):
+        if page_id not in final_rejections:
+            errors.append(f"critic_required_rejection_missing:{page_id}")
+    if errors:
+        return _invalid_result(members, tuple(dict.fromkeys(errors)))
+    return result
+
+
+def _explicit_rejections(
+    members: tuple[dict[str, object], ...], proposal: object
+) -> tuple[int, ...]:
+    if not isinstance(proposal, dict) or not isinstance(proposal.get("rejected"), list):
+        return ()
+    supplied_ids = {member["page_id"] for member in members}
+    rejected_ids: list[int] = []
+    for rejection in proposal["rejected"]:
+        if not isinstance(rejection, dict):
+            continue
+        page_id = rejection.get("page_id")
+        reason = rejection.get("reason")
+        if (
+            isinstance(page_id, int)
+            and not isinstance(page_id, bool)
+            and page_id in supplied_ids
+            and isinstance(reason, str)
+            and reason.strip()
+            and page_id not in rejected_ids
+        ):
+            rejected_ids.append(page_id)
+    return tuple(rejected_ids)
+
+
+def _critic_required_rejections(critique: CritiqueDecision) -> tuple[int, ...]:
+    required: list[int] = []
+    for challenge in critique.challenges:
+        if (
+            challenge.required_action is RequiredAction.REJECT
+            or challenge.dimension in FAIL_CLOSED_DIMENSIONS
+        ):
+            for page_id in challenge.page_ids:
+                if page_id not in required:
+                    required.append(page_id)
+    return tuple(required)
 
 
 def _model_visible_members(
