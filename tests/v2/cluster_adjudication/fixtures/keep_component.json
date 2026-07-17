@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "proposal": {
+    "groups": [
+      {
+        "name": "Home Air Purification",
+        "page_ids": [101, 102],
+        "rationale": "Shared consumer interest in residential air-cleaning products."
+      }
+    ],
+    "rejected": []
+  }
+}
