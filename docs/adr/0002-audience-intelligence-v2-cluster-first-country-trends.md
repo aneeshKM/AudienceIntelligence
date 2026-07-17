@@ -70,7 +70,12 @@ structured event stream, and shows live installer-style progress in one
 scrollable area. The backend owns the subprocess independently of a browser
 connection and supports event replay after reconnection. On successful Run
 Publication, the same page renders the final Audience Portfolio from
-`portfolio.json`.
+`portfolio.json`. Failed runs resume through the same global CLI and stable run
+ID. Explicitly confirmed cancellation terminates only the subprocess owned by
+that run, retains artifacts and event history, and records a durable terminal UI
+state. Persisted run state lets a restarted backend expose prior failure or
+cancellation facts and offer recovery without filesystem discovery in the
+browser.
 
 The browser connects when the subprocess starts. The CLI flushes each structured
 event, and the backend reads and forwards it incrementally without waiting for a

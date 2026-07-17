@@ -58,9 +58,23 @@
             <p class="eyebrow">Live execution</p>
             <h2 id="progress-title">Run progress</h2>
           </div>
-          <button id="follow-progress" class="quiet-action" type="button" hidden>
-            Follow new progress ↓
-          </button>
+          <div class="section-actions">
+            <button id="follow-progress" class="quiet-action" type="button" hidden>
+              Follow new progress ↓
+            </button>
+            <span id="cancel-run-hint" class="visually-hidden">
+              Stops only this run process and keeps completed artifacts.
+            </span>
+            <button
+              id="cancel-run"
+              class="danger-action"
+              type="button"
+              aria-describedby="cancel-run-hint"
+              hidden
+            >
+              Cancel run
+            </button>
+          </div>
         </div>
         <div id="progress-feed" class="progress-feed" aria-label="Pipeline progress by module"></div>
       </section>

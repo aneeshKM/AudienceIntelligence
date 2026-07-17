@@ -22,6 +22,9 @@ dependencies = [
   "uvicorn>=0.35,<1",
 ]
 
+[project.optional-dependencies]
+browser-test = ["playwright>=1.53,<2"]
+
 [project.scripts]
 audience-trend-miner = "audience_trend_miner.__main__:main"
 

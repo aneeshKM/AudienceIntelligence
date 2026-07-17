@@ -179,7 +179,8 @@ h1 {
 }
 
 .primary-action,
-.quiet-action {
+.quiet-action,
+.danger-action {
   border: 1px solid var(--ink);
   min-height: 3rem;
   padding: 0.7rem 1rem;
@@ -247,6 +248,42 @@ h1 {
 .quiet-action:hover {
   background: var(--ink);
   color: var(--surface);
+}
+
+.section-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
+}
+
+.danger-action {
+  background: var(--red-soft);
+  border-color: var(--red);
+  color: var(--red);
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.danger-action:hover:not(:disabled) {
+  background: var(--red);
+  color: var(--surface);
+}
+
+.danger-action:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.visually-hidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
 }
 
 .progress-feed {
