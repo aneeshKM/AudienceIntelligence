@@ -298,9 +298,17 @@ class RunPublicationStageTest(unittest.TestCase):
                 run_directory = root / "publication-run"
                 trend_path = run_directory / "trend-portfolio.json"
                 trend = json.loads(trend_path.read_text(encoding="utf-8"))
-                trend["payload"]["narrative_evidence"][0]["attempts"][0][
-                    "output"
-                ] = {field: "must-not-publish"}
+                attempts = trend["payload"]["narrative_evidence"][0]["attempts"]
+                valid_attempt = {**attempts[-1], "attempt": 2}
+                attempts[:] = [
+                    {
+                        **attempts[-1],
+                        "validation_status": "invalid",
+                        "output": {field: "must-not-publish"},
+                        "errors": ["rejected unsafe output"],
+                    },
+                    valid_attempt,
+                ]
                 trend_path.write_text(json.dumps(trend), encoding="utf-8")
 
                 completed = _run_publication(root)
@@ -317,9 +325,17 @@ class RunPublicationStageTest(unittest.TestCase):
             trend_path = run_directory / "trend-portfolio.json"
             trend = json.loads(trend_path.read_text(encoding="utf-8"))
             marker = "private hidden reasoning marker"
-            trend["payload"]["narrative_evidence"][0]["attempts"][0][
-                "output"
-            ] = marker
+            attempts = trend["payload"]["narrative_evidence"][0]["attempts"]
+            valid_attempt = {**attempts[-1], "attempt": 2}
+            attempts[:] = [
+                {
+                    **attempts[-1],
+                    "validation_status": "invalid",
+                    "output": marker,
+                    "errors": ["rejected unstructured output"],
+                },
+                valid_attempt,
+            ]
             trend_path.write_text(json.dumps(trend), encoding="utf-8")
 
             completed = _run_publication(root)
@@ -392,6 +408,9 @@ class RunPublicationStageTest(unittest.TestCase):
             trend_path = run_directory / "trend-portfolio.json"
             trend = json.loads(trend_path.read_text(encoding="utf-8"))
             trend["payload"]["audience_portfolio"][0]["narrative"][
+                "name"
+            ] = "Changed but schema-valid"
+            trend["payload"]["narrative_evidence"][0]["attempts"][-1]["output"][
                 "name"
             ] = "Changed but schema-valid"
             trend_path.write_text(json.dumps(trend), encoding="utf-8")
@@ -530,6 +549,11 @@ class RunPublicationStageTest(unittest.TestCase):
             "final-member",
             "traffic-members",
             "traffic-values",
+            "percentage-change",
+            "coverage",
+            "impact-score",
+            "ranking",
+            "final-narrative",
         )
         for scenario in scenarios:
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
@@ -572,10 +596,27 @@ class RunPublicationStageTest(unittest.TestCase):
                     trend["payload"]["audit_cluster_traffic"][0][
                         "member_page_ids"
                     ] = [1, 999]
-                else:
+                elif scenario == "traffic-values":
                     trend["payload"]["audit_cluster_traffic"][0]["previous"][
                         "observed_total"
                     ] += 1
+                elif scenario == "percentage-change":
+                    trend["payload"]["audience_portfolio"][0][
+                        "percentage_change"
+                    ] += 1
+                elif scenario == "coverage":
+                    trend["payload"]["audience_portfolio"][0]["coverage"][
+                        "previous"
+                    ] = 0.5
+                elif scenario == "impact-score":
+                    trend["payload"]["audience_portfolio"][0]["impact_score"] += 1
+                elif scenario == "ranking":
+                    trend["payload"]["audience_portfolio"].reverse()
+                    trend["payload"]["narrative_evidence"].reverse()
+                else:
+                    trend["payload"]["audience_portfolio"][0]["narrative"][
+                        "name"
+                    ] = "Contradictory final narrative"
                 trend_path.write_text(json.dumps(trend), encoding="utf-8")
 
                 completed = _run_publication(root)

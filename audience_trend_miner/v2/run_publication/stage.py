@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -21,6 +22,11 @@ from audience_trend_miner.v2.shared import (
     consume_artifact,
     validate_identifier,
     validate_schema,
+)
+from audience_trend_miner.v2.trend_portfolio import (
+    ClusterTraffic,
+    attach_cluster_traffic,
+    qualify_and_rank_portfolio,
 )
 
 
@@ -77,15 +83,24 @@ def execute_run_publication(
     run_directory = output_root / run_id
     publication_directory = run_directory / "publication"
     paths = upstream_paths or {}
+    resolved_paths = {
+        stage: paths.get(stage, run_directory / f"{stage}.json")
+        for stage in UPSTREAM_STAGES
+    }
     artifacts = {
         stage: consume_artifact(
-            paths.get(stage, run_directory / f"{stage}.json"),
+            resolved_paths[stage],
             run_id=run_id,
             stage=stage,
         )
         for stage in UPSTREAM_STAGES
     }
-    _validate_upstream(artifacts)
+    expected_traffic = attach_cluster_traffic(
+        run_id=run_id,
+        wikimedia_evidence_path=resolved_paths["wikimedia-evidence"],
+        cluster_adjudication_path=resolved_paths["cluster-adjudication"],
+    )
+    _validate_upstream(artifacts, expected_traffic)
     _ensure_safe(artifacts)
 
     if os.path.lexists(publication_directory):
@@ -174,7 +189,10 @@ def execute_run_publication(
     return publication_directory
 
 
-def _validate_upstream(artifacts: dict[str, dict[str, object]]) -> None:
+def _validate_upstream(
+    artifacts: dict[str, dict[str, object]],
+    expected_traffic: tuple[ClusterTraffic, ...],
+) -> None:
     for stage, artifact in artifacts.items():
         try:
             validate_schema(UPSTREAM_SCHEMAS[stage], artifact["payload"])
@@ -215,7 +233,11 @@ def _validate_upstream(artifacts: dict[str, dict[str, object]]) -> None:
     if trend_payload["run_facts"] != expected_run_facts:
         raise V2ContractError("upstream artifacts contain mismatched run facts")
     _validate_counts_and_membership(
-        evidence_payload, formation_payload, adjudication_payload, trend_payload
+        evidence_payload,
+        formation_payload,
+        adjudication_payload,
+        trend_payload,
+        expected_traffic,
     )
 
 
@@ -224,6 +246,7 @@ def _validate_counts_and_membership(
     formation: dict[str, object],
     adjudication: dict[str, object],
     trend: dict[str, object],
+    expected_traffic: tuple[ClusterTraffic, ...],
 ) -> None:
     preliminary = _list_of_mappings(formation["preliminary_clusters"])
     formation_counts = _mapping(formation["counts"])
@@ -325,6 +348,7 @@ def _validate_counts_and_membership(
         portfolio,
         narratives,
         traffic,
+        expected_traffic,
     )
 
 
@@ -335,6 +359,7 @@ def _validate_cross_stage_values(
     portfolio: list[dict[str, object]],
     narratives: list[dict[str, object]],
     traffic: list[dict[str, object]],
+    expected_traffic: tuple[ClusterTraffic, ...],
 ) -> None:
     canonical_pages = {
         page["page_id"]: page
@@ -368,6 +393,8 @@ def _validate_cross_stage_values(
                 )
 
     traffic_by_id = {record["cluster_id"]: record for record in traffic}
+    if traffic != [_traffic_record(record) for record in expected_traffic]:
+        raise V2ContractError("Trend Portfolio traffic evidence is inconsistent")
     for cluster_id, cluster in final_by_id.items():
         record = traffic_by_id[cluster_id]
         member_ids = [
@@ -383,11 +410,17 @@ def _validate_cross_stage_values(
             raise V2ContractError("Trend Portfolio traffic evidence is inconsistent")
 
     narrative_by_id = {record["cluster_id"]: record for record in narratives}
-    for item in portfolio:
+    qualification = qualify_and_rank_portfolio(expected_traffic)
+    expected_trends = qualification.portfolio.audience_trends
+    if [item["cluster_id"] for item in portfolio] != [
+        item.final_cluster_traffic.cluster_id for item in expected_trends
+    ]:
+        raise V2ContractError("Trend Portfolio qualification is inconsistent")
+    for item, expected_trend in zip(portfolio, expected_trends, strict=True):
         cluster_id = item["cluster_id"]
         record = traffic_by_id[cluster_id]
         cluster = final_by_id[cluster_id]
-        expected_traffic = {
+        expected_window_traffic = {
             "previous": record["previous"],
             "current": record["current"],
         }
@@ -397,13 +430,50 @@ def _validate_cross_stage_values(
             "members": cluster["members"],
             "direction": record["direction"],
         }
+        previous = expected_trend.final_cluster_traffic.previous
+        current = expected_trend.final_cluster_traffic.current
+        previous_equivalent = previous.seven_day_equivalent
+        current_equivalent = current.seven_day_equivalent
+        percentage_change = (
+            None
+            if previous_equivalent == 0
+            else (current_equivalent - previous_equivalent)
+            / previous_equivalent
+            * 100
+        )
+        member_count = len(expected_trend.final_cluster_traffic.member_page_ids)
+        expected_coverage = {
+            "previous": previous.observed_page_days
+            / (previous.successful_days * member_count),
+            "current": current.observed_page_days
+            / (current.successful_days * member_count),
+        }
+        attempts = _list_of_mappings(narrative_by_id[cluster_id]["attempts"])
         if (
-            item["traffic"] != expected_traffic
+            item["traffic"] != expected_window_traffic
             or item["direction"] != record["direction"]
+            or item["percentage_change"] != percentage_change
+            or item["coverage"] != expected_coverage
+            or item["impact_score"] != expected_trend.impact_score
             or _mapping(narrative_by_id[cluster_id]["model_input"])
             != expected_model_input
+            or attempts[-1]["validation_status"] != "valid"
+            or attempts[-1]["output"] != item["narrative"]
         ):
             raise V2ContractError("Trend Portfolio product facts are inconsistent")
+
+
+def _traffic_record(traffic: ClusterTraffic) -> dict[str, object]:
+    return {
+        "cluster_id": traffic.cluster_id,
+        "source_preliminary_cluster_id": traffic.source_preliminary_cluster_id,
+        "name": traffic.name,
+        "rationale": traffic.rationale,
+        "member_page_ids": list(traffic.member_page_ids),
+        "previous": asdict(traffic.previous),
+        "current": asdict(traffic.current),
+        "direction": traffic.direction,
+    }
 
 
 def _assemble_products(
