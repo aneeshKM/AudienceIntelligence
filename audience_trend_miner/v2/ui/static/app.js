@@ -248,6 +248,9 @@ async function pollRun(runId, generation) {
 function appendProgressEvent(event) {
   const panel = modulePanel(event.module);
   const item = eventTemplate.content.firstElementChild.cloneNode(true);
+  if (Number.isInteger(event.sequence)) {
+    item.dataset.sequence = String(event.sequence);
+  }
   const eventLevel =
     event.level === "warning" || event.level === "error" ? event.level : "info";
   const presentation = event.operation === "retry" ? "retry" : eventLevel;

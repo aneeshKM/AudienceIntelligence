@@ -235,8 +235,12 @@ class RunServerTest(unittest.TestCase):
 
             self.assertEqual(started.status_code, 202)
             self.assertEqual(running["status"], "running")
-            self.assertEqual(first["message"], "first day")
-            self.assertEqual(second["message"], "second day")
+            self.assertEqual(
+                first["message"], "Wikimedia evidence: fetch update."
+            )
+            self.assertEqual(
+                second["message"], "Wikimedia evidence: fetch update."
+            )
             self.assertEqual([first["sequence"], second["sequence"]], [1, 2])
             self.assertEqual(
                 set(first),
@@ -298,7 +302,10 @@ class RunServerTest(unittest.TestCase):
                     (missing["sequence"], missing["message"]),
                     (live["sequence"], live["message"]),
                 ],
-                [(2, "event 2"), (3, "event 3")],
+                [
+                    (2, "Trend portfolio: qualify update."),
+                    (3, "Trend portfolio: qualify update."),
+                ],
             )
 
     def test_backend_restart_recovers_event_history_by_run_and_sequence(self) -> None:
@@ -339,7 +346,10 @@ class RunServerTest(unittest.TestCase):
 
             self.assertEqual(
                 [(event["sequence"], event["message"]) for event in recovered],
-                [(2, "event 2"), (3, "event 3")],
+                [
+                    (2, "Run publication: write update."),
+                    (3, "Run publication: write update."),
+                ],
             )
 
     def test_malformed_cli_events_are_safely_normalized_without_stopping_reader(self) -> None:
@@ -392,7 +402,9 @@ class RunServerTest(unittest.TestCase):
                 [event["operation"] for event in events],
                 ["malformed-event", "malformed-event", "fetch"],
             )
-            self.assertEqual(events[2]["message"], "valid event")
+            self.assertEqual(
+                events[2]["message"], "Wikimedia evidence: fetch update."
+            )
             self.assertNotIn("private malformed details", json.dumps(events))
 
     def test_out_of_order_cli_sequence_is_not_hidden_by_durable_ordering(self) -> None:
@@ -432,7 +444,9 @@ class RunServerTest(unittest.TestCase):
 
             self.assertEqual([event["sequence"] for event in events], [1, 2])
             self.assertEqual(events[0]["operation"], "malformed-event")
-            self.assertEqual(events[1]["message"], "second event")
+            self.assertEqual(
+                events[1]["message"], "Trend portfolio: qualify update."
+            )
             self.assertNotIn("skipped sequence one", json.dumps(events))
 
     def test_server_binds_to_loopback_by_default(self) -> None:
@@ -573,7 +587,14 @@ class RunServerTest(unittest.TestCase):
                 output_root / "secret-run" / "ui-events.jsonl"
             ).read_text(encoding="utf-8")
             serialized_events = json.dumps(events)
-            self.assertTrue(all("[REDACTED]" in event["message"] for event in events))
+            self.assertEqual(
+                [event["message"] for event in events],
+                [
+                    "Wikimedia evidence: fetch warning.",
+                    "Cluster adjudication: review update.",
+                    "Trend portfolio: narrate update.",
+                ],
+            )
             for sensitive_text in (
                 "top-secret-token",
                 "private instructions",

@@ -120,7 +120,8 @@ class BrowserWorkflowTest(unittest.TestCase):
                 page.get_by_label("As-of Date").press("Enter")
                 page.locator(".event-item").first.wait_for()
                 last_sequence_before_disconnect = page.evaluate("lastSequence")
-                page.evaluate("socket.close()")
+                page.evaluate("streamWanted = false; socket.close()")
+                page.wait_for_function("socket === null")
                 history_path = output_root / "browser-resume" / "ui-events.jsonl"
                 deadline = time.monotonic() + 5
                 gap_event = None
@@ -145,13 +146,20 @@ class BrowserWorkflowTest(unittest.TestCase):
                     time.sleep(0.01)
                 self.assertIsNotNone(gap_event)
                 assert gap_event is not None
+                self.assertEqual(page.evaluate("lastSequence"), last_sequence_before_disconnect)
+                page.evaluate("connectEventStream(activeRun.id)")
                 page.wait_for_function(
                     "document.querySelector('#run-status').textContent.includes('failed')",
                     timeout=10_000,
                 )
-                page.locator(
-                    ".event-message", has_text=gap_event["message"]
-                ).first.wait_for(timeout=5_000)
+                replayed = page.locator(
+                    f'.event-item[data-sequence="{gap_event["sequence"]}"]'
+                )
+                replayed.wait_for(timeout=5_000)
+                self.assertEqual(
+                    replayed.locator(".event-message").text_content(),
+                    gap_event["message"],
+                )
                 first_attempt_count = page.locator(".event-item").count()
 
                 page.get_by_role("button", name="Retry or resume run").click()

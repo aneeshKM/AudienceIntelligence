@@ -34,6 +34,7 @@ from audience_trend_miner.v2.shared import (
 
 DEFAULT_HOST = "127.0.0.1"
 RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+EVENT_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 EVENT_HISTORY_NAME = "ui-events.jsonl"
 RUN_STATE_NAME = "ui-state.json"
 STATIC_DIRECTORY = Path(__file__).parent / "static"
@@ -531,7 +532,12 @@ def _progress_event(record: object, *, expected_run_id: str) -> ProgressEvent:
         module=record["module"],
         operation=record["operation"],
         level=record["level"],
-        message=_redact_message(record["message"]),
+        message=_public_event_message(
+            module=record["module"],
+            operation=record["operation"],
+            level=record["level"],
+            source_message=record["message"],
+        ),
         progress=progress,
     )
     try:
@@ -541,29 +547,35 @@ def _progress_event(record: object, *, expected_run_id: str) -> ProgressEvent:
     return event
 
 
-def _redact_message(message: object) -> str:
-    if not isinstance(message, str):
+def _public_event_message(
+    *,
+    module: object,
+    operation: object,
+    level: object,
+    source_message: object,
+) -> str:
+    if not isinstance(source_message, str) or not source_message:
         raise V2ContractError("progress event message is invalid")
-    if re.search(
-        r"(?i)\b(system\s+prompt|user\s+prompt|raw\s+(?:model\s+)?response|"
-        r"hidden\s+reasoning)\b",
-        message,
+    if (
+        not isinstance(module, str)
+        or EVENT_IDENTIFIER_PATTERN.fullmatch(module) is None
+        or not isinstance(operation, str)
+        or EVENT_IDENTIFIER_PATTERN.fullmatch(operation) is None
     ):
-        return "Sensitive run detail was [REDACTED]."
-    redacted = re.sub(
-        r"(?i)\b(authorization\s*:\s*bearer|api[_-]?key|token|secret|password)"
-        r"\s*[:=]?\s*\S+",
-        r"\1 [REDACTED]",
-        message,
+        raise V2ContractError("progress event identifiers are invalid")
+    if not isinstance(level, str):
+        raise V2ContractError("progress event level is invalid")
+    presentation = {
+        "info": "update",
+        "warning": "warning",
+        "error": "failure",
+    }.get(level)
+    if presentation is None:
+        raise V2ContractError("progress event level is invalid")
+    return (
+        f"{module.replace('-', ' ').capitalize()}: "
+        f"{operation.replace('-', ' ')} {presentation}."
     )
-    for name, value in os.environ.items():
-        if (
-            value
-            and len(value) >= 8
-            and name.upper().endswith(("KEY", "TOKEN", "SECRET", "PASSWORD"))
-        ):
-            redacted = redacted.replace(value, "[REDACTED]")
-    return redacted
 
 
 def _process_is_alive(process_id: int) -> bool:
