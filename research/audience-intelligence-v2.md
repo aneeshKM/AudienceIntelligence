@@ -76,7 +76,7 @@ minimal, schema-versioned artifacts between them:
    observations, attaches traffic, classifies direction, ranks robust trends, and
    generates the structured portfolio narratives.
 5. **Run Publication** validates and atomically publishes `portfolio.json`,
-   `report.html`, `audit.json`, and `manifest.json`.
+   `audit.json`, and `manifest.json`.
 
 The modules share a `run_id`. Each module validates that its upstream artifact is
 complete and schema-compatible, reads it without rerunning upstream work, and
@@ -376,13 +376,16 @@ The narrative must describe supplied evidence without inventing traffic or
 claiming that Wikipedia attention proves causation, identity, income, or future
 behavior.
 
-### 12.1 Basic UI-facing portfolio contract
+### 12.1 UI-facing portfolio contract
 
-`portfolio.json` is the UI-facing structured contract. `report.html` renders
-that contract rather than reconstructing portfolio meaning from internal
-pipeline objects. The basic report shows:
+`portfolio.json` is the UI-facing structured contract. Run Publication does not
+render a static HTML report. A separate interactive UI consumes the contract
+rather than reconstructing portfolio meaning from internal pipeline objects or
+progress logs.
 
-- report title and effective `as-of` date;
+The final portfolio view shows:
+
+- effective `as-of` date;
 - previous and current window dates;
 - one card per selected robust audience, without an explanation of rank;
 - audience name and Growing or Shrinking direction badge;
@@ -390,7 +393,7 @@ pipeline objects. The basic report shows:
 - commercial interpretation; and
 - buying-power rating and rationale.
 
-The report ends with a short statement that Wikipedia attention does not prove
+The view includes a short statement that Wikipedia attention does not prove
 reader identity, intent, income, causation, or future behavior. When no robust
 audience qualifies, show the plain sentence `No robust audience trends qualified
 for this run.`
@@ -398,8 +401,35 @@ for this run.`
 Do not show absolute seven-day-equivalent traffic, member Wikipedia titles,
 brand categories, rank explanations, run degradation details, rejected or
 uncertain clusters, similarity evidence, prompts, agent state, validation
-diagnostics, or retry histories in the basic UI. Keep required operational and
-audit facts in machine-readable artifacts.
+diagnostics, or retry histories in the final portfolio cards. Keep required
+operational and audit facts in machine-readable artifacts.
+
+### 12.2 Interactive run UI
+
+After the five pipeline modules, provide a separate local UI backed by FastAPI.
+It invokes the existing global CLI as a subprocess and never reimplements module
+behavior. The user supplies an As-of Date and starts or resumes a stable
+`run_id`.
+
+Use one scrollable, installer-style area for the complete experience. While the
+CLI runs, append live module events, bounded progress, retries, warnings, and
+terminal failures. On successful Run Publication, transition the same page to
+the final Audience Portfolio loaded from `portfolio.json`. A failed run retains
+its event history and offers retry or resume through the same `run_id`.
+
+Live means that the browser connects when the subprocess starts and receives
+each structured event as soon as the CLI emits and flushes it. The backend reads
+the running process incrementally and forwards events without waiting for a
+module boundary, process exit, or Run Publication. The CLI must use unbuffered
+event output so long-running operations remain observable while they are in
+progress.
+
+The FastAPI backend owns the subprocess independently of the browser connection,
+allows at most one active process per `run_id`, and supports replay followed by
+live streaming after reconnection. Invoke the CLI with an argument array and no
+shell. Bind the local server to loopback by default. Cancellation requires
+explicit confirmation, terminates only the owned subprocess, records a terminal
+event, and does not delete completed artifacts.
 
 ## 13. Request scheduling and failures
 
@@ -415,8 +445,16 @@ Every module emits concise progress logs so the global command is never silent
 during long work. Default human-readable events identify the module, current
 operation, and bounded progress such as Analytics day, metadata batch, embedding
 batch, selected-cluster count, Groq proposal/critique/revision activity, trend
-qualification, and publication. Support structured JSON logging as an optional
-mode. Never log secrets or hidden chain-of-thought.
+qualification, and publication.
+
+Support schema-versioned structured JSON events as the stable UI integration
+contract. Each event contains the run ID, monotonic sequence, timestamp, module,
+operation, level, message, and optional bounded progress. Persist enough event
+history to replay events only after a browser disconnect, then continue the live
+stream from the next sequence. Event persistence and replay must not delay
+delivery to an already connected browser. A malformed event is surfaced safely
+without allowing the UI to infer pipeline state from human-readable text. Never
+log secrets or hidden chain-of-thought.
 
 ## 14. Minimal artifacts
 
@@ -457,7 +495,9 @@ Live testing happens after this research phase and before implementation.
 - Cross-cluster reconciliation and whole-cluster merging.
 - Re-clustering or recovery of rejected pages.
 - Displaying uncertain trends.
-- Displaying relevant brand categories in the basic report.
+- Displaying relevant brand categories in the final portfolio view.
+- Remote multi-user UI deployment, authentication, authorization, or shared
+  worker scheduling; the V2 UI is local and loopback-bound by default.
 - Making exhaustive cluster adjudication the default by changing
   `AUDIENCE_TREND_MINER_MAX_LLM_CLUSTERS` from `10` to `all`; retain the setting
   as an operational safety override.
