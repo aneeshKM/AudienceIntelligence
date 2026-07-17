@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 runs/
+legacy/
 build/
 audience_trend_miner.egg-info/
 refactor/

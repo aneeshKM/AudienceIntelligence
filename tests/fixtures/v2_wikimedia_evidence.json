@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "source": "fixture:top-per-country/US",
+  "daily_responses": {
+    "2026-07-02": {"records": [{"project": "en.wikipedia", "article": "Alias_A", "views_ceil": 110}, {"project": "de.wikipedia", "article": "Nicht_A", "views_ceil": 90}]},
+    "2026-07-03": {"records": [{"project": "en.wikipedia", "article": "Alias_B", "views_ceil": 120}]},
+    "2026-07-04": {"error": "fixture unavailable"},
+    "2026-07-05": {"records": [{"project": "en.wikipedia", "article": "Alias_A", "views_ceil": 130}]},
+    "2026-07-06": {"records": []},
+    "2026-07-07": {"error": "fixture unavailable"},
+    "2026-07-08": {"records": [{"project": "en.wikipedia", "article": "Alias_B", "views_ceil": 140}]},
+    "2026-07-09": {"records": [{"project": "en.wikipedia", "article": "Alias_A", "views_ceil": 210}]},
+    "2026-07-10": {"error": "fixture unavailable"},
+    "2026-07-11": {"records": [{"project": "en.wikipedia", "article": "Canonical_A", "views_ceil": 220}]},
+    "2026-07-12": {"records": [{"project": "fr.wikipedia", "article": "Pas_A", "views_ceil": 200}]},
+    "2026-07-13": {"records": [{"project": "en.wikipedia", "article": "Alias_B", "views_ceil": 230}]},
+    "2026-07-14": {"error": "fixture unavailable"},
+    "2026-07-15": {"records": [{"project": "en.wikipedia", "article": "Alias_A", "views_ceil": 240}]}
+  },
+  "canonical_pages": {
+    "Alias_A": {"page_id": 42, "canonical_title": "Canonical A"},
+    "Canonical_A": {"page_id": 42, "canonical_title": "Canonical A"},
+    "Alias_B": {"page_id": 84, "canonical_title": "Canonical B"}
+  }
+}
