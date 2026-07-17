@@ -17,6 +17,8 @@ def main() -> int:
         return _semantic_audience_formation_main(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "v2-cluster-adjudication":
         return _cluster_adjudication_main(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "v2-trend-portfolio":
+        return _trend_portfolio_main(sys.argv[2:])
     parser = argparse.ArgumentParser(prog="audience-trend-miner")
     parser.add_argument("--as-of", type=date.fromisoformat, required=False)
     parser.add_argument("--output-dir", type=Path, default=Path("runs"))
@@ -242,8 +244,14 @@ def _cluster_adjudication_main(arguments: list[str]) -> int:
             "AUDIENCE_TREND_MINER_CLUSTER_MODEL", DEFAULT_CLUSTER_MODEL
         ),
     )
-    parser.add_argument("--progress-format", choices=("human", "json"), default="human")
-    parser.add_argument("--interrupt-before-completion", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--progress-format", choices=("human", "json"), default="human"
+    )
+    parser.add_argument(
+        "--interrupt-before-completion",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parsed = parser.parse_args(arguments)
     if parsed.fixture is None and not os.environ.get("GROQ_API_KEY"):
         parser.error("GROQ_API_KEY is required without --fixture")
@@ -257,6 +265,51 @@ def _cluster_adjudication_main(arguments: list[str]) -> int:
             run_id=parsed.run_id,
             output_root=parsed.output_dir,
             semantic_formation_path=parsed.semantic_audience_formation,
+            adapter_factory=adapter_factory,
+            progress_sink=_v2_progress_sink(parsed.progress_format),
+            interrupt_before_completion=parsed.interrupt_before_completion,
+        )
+    )
+
+
+def _trend_portfolio_main(arguments: list[str]) -> int:
+    from audience_trend_miner.v2.trend_portfolio import (
+        DEFAULT_NARRATIVE_MODEL,
+        FrozenNarrativeAdapterFactory,
+        ProductionNarrativeAdapterFactory,
+        execute_trend_portfolio_stage,
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="audience-trend-miner v2-trend-portfolio"
+    )
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--wikimedia-evidence", type=Path)
+    parser.add_argument("--cluster-adjudication", type=Path)
+    parser.add_argument("--fixture", type=Path)
+    parser.add_argument(
+        "--model",
+        default=os.environ.get(
+            "AUDIENCE_TREND_MINER_NARRATIVE_MODEL", DEFAULT_NARRATIVE_MODEL
+        ),
+    )
+    parser.add_argument("--progress-format", choices=("human", "json"), default="human")
+    parser.add_argument("--interrupt-before-completion", action="store_true", help=argparse.SUPPRESS)
+    parsed = parser.parse_args(arguments)
+    if parsed.fixture is None and not os.environ.get("GROQ_API_KEY"):
+        parser.error("GROQ_API_KEY is required without --fixture")
+    adapter_factory = (
+        FrozenNarrativeAdapterFactory.from_file(parsed.fixture)
+        if parsed.fixture is not None
+        else ProductionNarrativeAdapterFactory(model=parsed.model)
+    )
+    return _execute_v2(
+        lambda: execute_trend_portfolio_stage(
+            run_id=parsed.run_id,
+            output_root=parsed.output_dir,
+            wikimedia_evidence_path=parsed.wikimedia_evidence,
+            cluster_adjudication_path=parsed.cluster_adjudication,
             adapter_factory=adapter_factory,
             progress_sink=_v2_progress_sink(parsed.progress_format),
             interrupt_before_completion=parsed.interrupt_before_completion,
