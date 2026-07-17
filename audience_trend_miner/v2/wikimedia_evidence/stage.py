@@ -32,6 +32,7 @@ from audience_trend_miner.v2.shared import (
     ProgressSink,
     V2ContractError,
     atomic_write_json,
+    canonical_json_fingerprint,
     consume_artifact,
     record_run_configuration,
     validate_artifact,
@@ -170,6 +171,21 @@ def execute_wikimedia_evidence(
     workers: int = 4,
 ) -> Path:
     """Acquire, resolve, validate, and atomically publish production Run Evidence."""
+    run_directory = output_root / run_id
+    run_directory.mkdir(parents=True, exist_ok=True)
+    record_run_configuration(
+        run_directory,
+        run_id,
+        {"as_of": as_of_date.isoformat(), "wikimedia_mode": "production"},
+    )
+    artifact_path = run_directory / f"{STAGE}.json"
+    if artifact_path.exists():
+        return _resume_completed_evidence(
+            artifact_path,
+            run_id=run_id,
+            as_of_date=as_of_date,
+            progress_sink=progress_sink,
+        )
     previous_start = as_of_date - timedelta(days=15)
     previous_end = as_of_date - timedelta(days=9)
     current_start = as_of_date - timedelta(days=8)
@@ -289,8 +305,6 @@ def execute_wikimedia_evidence(
     artifact = {"schema_version": ARTIFACT_SCHEMA_VERSION, "run_id": run_id, "stage": STAGE, "status": "complete", "payload": payload}
     validate_schema(SCHEMA_PATH, payload)
     validate_artifact(artifact, run_id=run_id, stage=STAGE)
-    artifact_path = output_root / run_id / f"{STAGE}.json"
-    artifact_path.parent.mkdir(parents=True, exist_ok=True)
     store.reserve_publication_path(run_id, str(artifact_path))
     atomic_write_json(artifact_path, artifact)
     store.mark_publication_complete(run_id, str(artifact_path))
@@ -332,8 +346,20 @@ def execute_wikimedia_evidence_fixture(
     record_run_configuration(
         run_directory,
         run_id,
-        {"as_of": as_of_date.isoformat(), "wikimedia_mode": "fixture"},
+        {
+            "as_of": as_of_date.isoformat(),
+            "wikimedia_fixture_fingerprint": canonical_json_fingerprint(fixture),
+            "wikimedia_mode": "fixture",
+        },
     )
+    artifact_path = run_directory / f"{STAGE}.json"
+    if artifact_path.exists():
+        return _resume_completed_evidence(
+            artifact_path,
+            run_id=run_id,
+            as_of_date=as_of_date,
+            progress_sink=progress_sink,
+        )
 
     daily_responses = fixture["daily_responses"]
     nominal_days: list[dict[str, object]] = []
@@ -448,7 +474,6 @@ def execute_wikimedia_evidence_fixture(
     }
     validate_schema(SCHEMA_PATH, payload)
     validate_artifact(artifact, run_id=run_id, stage=STAGE)
-    artifact_path = run_directory / f"{STAGE}.json"
     atomic_write_json(artifact_path, artifact)
     progress_sink(
         ProgressEvent(
@@ -460,6 +485,35 @@ def execute_wikimedia_evidence_fixture(
             level="info",
             message="published complete Wikimedia Evidence",
             progress=BoundedProgress(15, 15),
+        )
+    )
+    return artifact_path
+
+
+def _resume_completed_evidence(
+    artifact_path: Path,
+    *,
+    run_id: str,
+    as_of_date: date,
+    progress_sink: ProgressSink,
+) -> Path:
+    artifact = consume_wikimedia_evidence(artifact_path, run_id=run_id)
+    payload = artifact["payload"]
+    assert isinstance(payload, dict)
+    if payload["as_of_date"] != as_of_date.isoformat():
+        raise V2ContractError(
+            "completed Wikimedia Evidence conflicts with requested configuration"
+        )
+    progress_sink(
+        ProgressEvent(
+            run_id=run_id,
+            sequence=1,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            module=STAGE,
+            operation="resume",
+            level="info",
+            message="resumed compatible completed Wikimedia Evidence",
+            progress=BoundedProgress(1, 1),
         )
     )
     return artifact_path

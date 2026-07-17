@@ -1,0 +1,300 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+FIXTURES = Path(__file__).with_name("fixtures")
+FORMATION_FIXTURES = (
+    Path(__file__).parents[1]
+    / "semantic_audience_formation"
+    / "fixtures"
+)
+
+
+def global_cli_arguments(
+    output_root: Path,
+    *,
+    run_id: str = "global-run",
+    extra: tuple[str, ...] = (),
+) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "audience_trend_miner",
+        "v2-run",
+        "--run-id",
+        run_id,
+        "--as-of",
+        "2026-07-17",
+        "--output-dir",
+        str(output_root),
+        "--wikimedia-fixture",
+        str(FIXTURES / "global_wikimedia_evidence.json"),
+        "--embedding-fixture",
+        str(FORMATION_FIXTURES / "preliminary_cluster_embeddings.json"),
+        "--cluster-fixture",
+        str(FIXTURES / "global_cluster_decisions.json"),
+        "--narrative-fixture",
+        str(FIXTURES / "global_narratives.json"),
+        "--similarity-threshold",
+        "0.3",
+        "--progress-format",
+        "json",
+        *extra,
+    ]
+
+
+def run_global_cli(
+    output_root: Path,
+    *,
+    run_id: str = "global-run",
+    extra: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        global_cli_arguments(output_root, run_id=run_id, extra=extra),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _rewritten_fixture(
+    root: Path,
+    source: Path,
+    name: str,
+    update,
+) -> Path:
+    fixture = json.loads(source.read_text(encoding="utf-8"))
+    update(fixture)
+    path = root / name
+    path.write_text(json.dumps(fixture), encoding="utf-8")
+    return path
+
+
+class GlobalOrchestrationTest(unittest.TestCase):
+    def test_global_cli_orders_all_modules_and_succeeds_only_after_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_root = Path(temporary_directory)
+
+            completed = run_global_cli(output_root)
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            events = [json.loads(line) for line in completed.stdout.splitlines()]
+            modules = [event["module"] for event in events]
+            first_positions = {
+                module: modules.index(module)
+                for module in (
+                    "wikimedia-evidence",
+                    "semantic-audience-formation",
+                    "cluster-adjudication",
+                    "trend-portfolio",
+                    "run-publication",
+                )
+            }
+            self.assertEqual(
+                list(first_positions),
+                sorted(first_positions, key=lambda module: first_positions[module]),
+            )
+            self.assertEqual(
+                [event["sequence"] for event in events],
+                list(range(1, len(events) + 1)),
+            )
+            self.assertTrue(
+                all(event["schema_version"] == "1.0" for event in events)
+            )
+            publication = output_root / "global-run" / "publication"
+            self.assertEqual(
+                {path.name for path in publication.iterdir()},
+                {"portfolio.json", "audit.json", "manifest.json"},
+            )
+
+    def test_json_events_are_flushed_while_the_process_is_running(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            process = subprocess.Popen(
+                global_cli_arguments(Path(temporary_directory)),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            assert process.stdout is not None
+
+            first_line = process.stdout.readline()
+
+            self.assertTrue(first_line)
+            self.assertIsNone(process.poll(), "first event was buffered until process exit")
+            first_event = json.loads(first_line)
+            self.assertEqual(first_event["module"], "wikimedia-evidence")
+            remaining_stdout, stderr = process.communicate(timeout=30)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertTrue(remaining_stdout)
+
+    def test_resume_from_every_module_boundary_reuses_completed_work(self) -> None:
+        stage_names = (
+            "wikimedia-evidence",
+            "semantic-audience-formation",
+            "cluster-adjudication",
+            "trend-portfolio",
+            "run-publication",
+        )
+        for first_incomplete in range(1, len(stage_names) + 1):
+            with self.subTest(first_incomplete=first_incomplete):
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    output_root = Path(temporary_directory)
+                    initial = run_global_cli(output_root)
+                    self.assertEqual(initial.returncode, 0, initial.stderr)
+                    run_directory = output_root / "global-run"
+                    for stage in stage_names[first_incomplete:4]:
+                        (run_directory / f"{stage}.json").unlink()
+                    if first_incomplete <= 4:
+                        publication = run_directory / "publication"
+                        publication.unlink()
+                        for completed_directory in run_directory.glob(
+                            ".publication.*.complete"
+                        ):
+                            shutil.rmtree(completed_directory)
+
+                    resumed = run_global_cli(output_root)
+
+                    self.assertEqual(resumed.returncode, 0, resumed.stderr)
+                    events = [
+                        json.loads(line) for line in resumed.stdout.splitlines()
+                    ]
+                    for completed_stage in stage_names[:first_incomplete]:
+                        operations = [
+                            event["operation"]
+                            for event in events
+                            if event["module"] == completed_stage
+                        ]
+                        self.assertEqual(
+                            operations,
+                            ["resume"],
+                            f"{completed_stage} repeated work: {operations}",
+                        )
+
+    def test_resume_rejects_configuration_drift_at_module_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_root = Path(temporary_directory)
+            initial = run_global_cli(output_root)
+            self.assertEqual(initial.returncode, 0, initial.stderr)
+            changed_cluster = _rewritten_fixture(
+                output_root,
+                FIXTURES / "global_cluster_decisions.json",
+                "changed-cluster.json",
+                lambda fixture: fixture.update(model="fixture/changed-cluster-model"),
+            )
+            changed_narrative = _rewritten_fixture(
+                output_root,
+                FIXTURES / "global_narratives.json",
+                "changed-narrative.json",
+                lambda fixture: fixture.update(model="fixture/changed-narrative-model"),
+            )
+            cases = (
+                ("wikimedia-evidence", ("--as-of", "2026-07-18")),
+                ("semantic-audience-formation", ("--similarity-threshold", "0.4")),
+                ("cluster-adjudication", ("--cluster-fixture", str(changed_cluster))),
+                ("trend-portfolio", ("--narrative-fixture", str(changed_narrative))),
+            )
+            for module, extra in cases:
+                with self.subTest(module=module):
+                    resumed = run_global_cli(output_root, extra=extra)
+                    self.assertNotEqual(resumed.returncode, 0)
+                    self.assertIn("conflict", resumed.stderr)
+                    self.assertNotIn("Traceback", resumed.stderr)
+
+    def test_module_failure_stops_downstream_work_and_returns_failure_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_root = Path(temporary_directory)
+            failing_fixture = output_root / "failing-cluster.json"
+            failing_fixture.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "model": "fixture/failing-cluster-model",
+                        "clusters": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            failed = run_global_cli(
+                output_root,
+                extra=("--cluster-fixture", str(failing_fixture)),
+            )
+
+            self.assertEqual(failed.returncode, 1)
+            self.assertIn("error:", failed.stderr)
+            self.assertNotIn("Traceback", failed.stderr)
+            modules = {
+                json.loads(line)["module"] for line in failed.stdout.splitlines()
+            }
+            self.assertEqual(
+                modules,
+                {"wikimedia-evidence", "semantic-audience-formation"},
+            )
+            self.assertFalse((output_root / "global-run" / "publication").exists())
+
+    def test_invalid_fixture_returns_a_clean_failure_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_root = Path(temporary_directory)
+            invalid_fixture = output_root / "invalid.json"
+            invalid_fixture.write_text("{}", encoding="utf-8")
+
+            failed = run_global_cli(
+                output_root,
+                extra=("--narrative-fixture", str(invalid_fixture)),
+            )
+
+            self.assertEqual(failed.returncode, 1)
+            self.assertIn("error: narrative fixture", failed.stderr)
+            self.assertNotIn("Traceback", failed.stderr)
+
+    def test_publication_failure_is_terminal_and_the_same_run_resumes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_root = Path(temporary_directory)
+
+            failed = run_global_cli(
+                output_root,
+                extra=("--interrupt-before-publication",),
+            )
+
+            self.assertEqual(failed.returncode, 1)
+            self.assertIn("publication interrupted before completion", failed.stderr)
+            self.assertFalse((output_root / "global-run" / "publication").exists())
+            failed_events = [
+                json.loads(line) for line in failed.stdout.splitlines()
+            ]
+            self.assertEqual(failed_events[-1]["module"], "run-publication")
+            self.assertEqual(failed_events[-1]["operation"], "stage")
+
+            resumed = run_global_cli(output_root)
+
+            self.assertEqual(resumed.returncode, 0, resumed.stderr)
+            resumed_events = [
+                json.loads(line) for line in resumed.stdout.splitlines()
+            ]
+            for module in (
+                "wikimedia-evidence",
+                "semantic-audience-formation",
+                "cluster-adjudication",
+                "trend-portfolio",
+            ):
+                self.assertEqual(
+                    [
+                        event["operation"]
+                        for event in resumed_events
+                        if event["module"] == module
+                    ],
+                    ["resume"],
+                )
+            self.assertTrue((output_root / "global-run" / "publication").is_dir())
+
+
+if __name__ == "__main__":
+    unittest.main()

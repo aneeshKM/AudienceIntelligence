@@ -30,6 +30,24 @@ Supply an analysis date for a reproducible run:
 audience-trend-miner --as-of 2026-07-16 --output-dir runs
 ```
 
+Run the complete V2 pipeline with a stable identifier:
+
+```bash
+audience-trend-miner v2-run \
+  --run-id july-16-v2 \
+  --as-of 2026-07-16 \
+  --output-dir runs \
+  --progress-format json
+```
+
+The V2 command invokes Wikimedia Evidence, Semantic Audience Formation,
+Cluster Adjudication, Trend Portfolio, and Run Publication in dependency order.
+Reusing the same compatible arguments and `run_id` resumes completed module
+artifacts; configuration drift fails closed. JSON progress is flushed event by
+event for streaming consumers. Production runs require `DATABASE_URL` and
+`GROQ_API_KEY`; each external boundary also has a fixture option for deterministic
+integration runs.
+
 Use a stable run identifier to resume interrupted Wikimedia work without
 refetching completed evidence:
 
