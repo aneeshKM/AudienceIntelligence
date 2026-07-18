@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["configuration", "run_facts", "counts", "audience_portfolio", "narrative_evidence", "audit_cluster_traffic", "completion"],
+  "properties": {
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "integration", "wikimedia_evidence_fingerprint", "cluster_adjudication_fingerprint"],
+      "properties": {
+        "model": {"type": "string", "minLength": 1},
+        "integration": {
+          "type": "object", "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {"name": {"type": "string", "minLength": 1}, "version": {"type": "string", "minLength": 1}}
+        },
+        "wikimedia_evidence_fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "cluster_adjudication_fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "run_facts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["as_of_date", "nominal_windows"],
+      "properties": {
+        "as_of_date": {"type": "string", "format": "date"},
+        "nominal_windows": {
+          "type": "object", "additionalProperties": false,
+          "required": ["previous", "current"],
+          "properties": {
+            "previous": {"$ref": "#/$defs/nominalWindow"},
+            "current": {"$ref": "#/$defs/nominalWindow"}
+          }
+        }
+      }
+    },
+    "counts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["qualified", "narrated"],
+      "properties": {"qualified": {"type": "integer", "minimum": 0, "maximum": 10}, "narrated": {"type": "integer", "minimum": 0, "maximum": 10}}
+    },
+    "audience_portfolio": {"type": "array", "maxItems": 10, "items": {"$ref": "#/$defs/portfolioItem"}},
+    "narrative_evidence": {"type": "array", "maxItems": 10, "items": {"$ref": "#/$defs/narrativeEvidence"}},
+    "audit_cluster_traffic": {"type": "array", "items": {"$ref": "#/$defs/clusterTraffic"}},
+    "completion": {"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "complete"}}}
+  },
+  "$defs": {
+    "nominalWindow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {"start": {"type": "string", "format": "date"}, "end": {"type": "string", "format": "date"}}
+    },
+    "windowTraffic": {
+      "type": "object", "additionalProperties": false,
+      "required": ["observed_total", "observed_page_days", "successful_days", "conservative_observed_minimum", "conservative_observed_maximum", "seven_day_equivalent", "minimum", "maximum"],
+      "properties": {
+        "observed_total": {"type": "integer", "minimum": 0}, "observed_page_days": {"type": "integer", "minimum": 0}, "successful_days": {"type": "integer", "minimum": 1},
+        "conservative_observed_minimum": {"type": "integer", "minimum": 0}, "conservative_observed_maximum": {"type": "integer", "minimum": 0},
+        "seven_day_equivalent": {"type": "number", "minimum": 0}, "minimum": {"type": "number", "minimum": 0}, "maximum": {"type": "number", "minimum": 0}
+      }
+    },
+    "traffic": {"type": "object", "additionalProperties": false, "required": ["previous", "current"], "properties": {"previous": {"$ref": "#/$defs/windowTraffic"}, "current": {"$ref": "#/$defs/windowTraffic"}}},
+    "coverage": {"type": "object", "additionalProperties": false, "required": ["previous", "current"], "properties": {"previous": {"type": "number", "minimum": 0, "maximum": 1}, "current": {"type": "number", "minimum": 0, "maximum": 1}}},
+    "narrative": {
+      "title": "AudienceNarrative",
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "summary", "commercial_interpretation", "brand_categories", "buying_power_rating", "buying_power_rationale"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1}, "summary": {"type": "string", "minLength": 1}, "commercial_interpretation": {"type": "string", "minLength": 1},
+        "brand_categories": {
+          "type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true,
+          "items": {"enum": ["Advertising", "Air quality", "Apparel", "Automotive", "Beauty", "Consumer electronics", "Entertainment", "Financial services", "Food and beverage", "Gaming", "Health and wellness", "Home improvement", "Home systems", "HVAC", "Insurance", "Outdoor recreation", "Personal care", "Pet care", "Retail", "Software", "Sports", "Telecommunications", "Travel"]}
+        },
+        "buying_power_rating": {"enum": ["high", "medium", "low"]}, "buying_power_rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "portfolioItem": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cluster_id", "source_preliminary_cluster_id", "direction", "traffic", "percentage_change", "coverage", "confidence", "impact_score", "narrative"],
+      "properties": {
+        "cluster_id": {"type": "string", "minLength": 1}, "source_preliminary_cluster_id": {"type": "string", "minLength": 1},
+        "direction": {"enum": ["robust_growth", "robust_shrinking", "sudden_growth"]}, "traffic": {"$ref": "#/$defs/traffic"}, "percentage_change": {"type": ["number", "null"]},
+        "coverage": {"$ref": "#/$defs/coverage"}, "confidence": {"enum": ["robust", "observed"]}, "impact_score": {"type": "number", "minimum": 0}, "narrative": {"$ref": "#/$defs/narrative"}
+      }
+    },
+    "attempt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["attempt", "delivery_status", "validation_status", "output", "errors"],
+      "properties": {
+        "attempt": {"type": "integer", "minimum": 1, "maximum": 3}, "delivery_status": {"enum": ["delivered", "error"]},
+        "validation_status": {"enum": ["valid", "invalid", "not_run"]}, "output": {}, "errors": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "narrativeEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cluster_id", "prompt", "model_input", "model", "attempts"],
+      "properties": {
+        "cluster_id": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}, "model_input": {"type": "object"}, "model": {"type": "string", "minLength": 1},
+        "attempts": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"$ref": "#/$defs/attempt"}}
+      }
+    },
+    "clusterTraffic": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cluster_id", "source_preliminary_cluster_id", "name", "rationale", "member_page_ids", "previous", "current", "direction"],
+      "properties": {
+        "cluster_id": {"type": "string", "minLength": 1}, "source_preliminary_cluster_id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}, "rationale": {"type": "string", "minLength": 1},
+        "member_page_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "integer"}}, "previous": {"$ref": "#/$defs/windowTraffic"}, "current": {"$ref": "#/$defs/windowTraffic"},
+        "direction": {"enum": ["robust_growth", "robust_shrinking", "sudden_growth", "uncertain_direction"]}
+      }
+    }
+  }
+}

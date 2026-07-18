@@ -1,7 +1,12 @@
 # ADR-0001: PostgreSQL-backed resumable Wikimedia evidence pipeline
 
-- Status: Accepted
+- Status: Superseded by ADR-0002
 - Date: 2026-07-16
+
+This is a historical record of the retired V1 implementation. It does not
+describe supported application code, schemas, configuration, or CLI behavior.
+The active product architecture is defined by
+[ADR-0002](0002-audience-intelligence-v2-cluster-first-country-trends.md).
 
 ## Context
 

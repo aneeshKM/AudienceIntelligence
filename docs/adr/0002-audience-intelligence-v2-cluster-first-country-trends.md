@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed. This ADR records the design to implement after the V2 research and
-live API experiments are complete.
+Accepted. This ADR defines the supported product architecture. The former V1
+implementation was retired after the complete V2 pipeline and UI were verified.
 
 ## Context
 
@@ -24,8 +24,8 @@ Build V2 as a separate cluster-first pipeline:
 
 1. Request 14 days of `top-per-country/US` Analytics data.
 2. Keep only `en.wikipedia` records and union both windows.
-3. Resolve canonical content metadata with the best official MediaWiki request
-   pattern selected by live implementation-phase testing.
+3. Resolve canonical content metadata with the batched Action API request and
+   continuation contract selected by the [live MediaWiki source comparison](../research/mediawiki-source-contract.md).
 4. Represent each page with title/lead and cleaned categories.
 5. Combine content and category cosine similarity with `70/30` weights.
 6. Form preliminary connected components at an empirically selected threshold.
@@ -46,13 +46,47 @@ Evidence, Semantic Audience Formation, Cluster Adjudication, Trend Portfolio,
 and Run Publication. Each consumes a minimal, complete, schema-versioned
 artifact for the same `run_id`. The normal global command runs them in order and
 resumes at the first incomplete module; stage commands expose the same interfaces
-for manual execution and recovery. All long-running work emits progress logs.
+for manual execution and recovery. All long-running work emits human-readable
+progress and can emit schema-versioned structured JSON events containing the run
+ID, sequence, timestamp, module, operation, level, message, and optional bounded
+progress.
 
-`portfolio.json` is the UI-facing structured contract and `report.html` renders
-it. The basic report shows dates, audience cards, direction, trend summary,
-percentage change, coverage, commercial interpretation, buying-power assessment,
-the limitation note, and a plain empty state. Operational and agent audit detail
-does not appear in the basic UI.
+Give each V2 module an explicit package under `audience_trend_miner/v2/`, with a
+small public interface and only as many internal files as its implementation
+requires. Keep genuinely cross-module run, artifact, progress, validation, and
+atomic-write primitives in `audience_trend_miner/v2/shared/`. Module adapters and
+schemas remain owned by their module; tests mirror module ownership under
+`tests/v2/`. V2 import paths move cleanly to these packages without permanent
+top-level compatibility wrappers.
+
+Run Publication atomically publishes `portfolio.json`, `audit.json`, and
+`manifest.json`. `portfolio.json` is the UI-facing structured contract; Run
+Publication does not render a static report.
+
+After the five pipeline modules, provide a separate local interactive UI backed
+by FastAPI. The UI invokes the existing global CLI rather than reimplementing
+pipeline behavior. It starts or resumes a stable `run_id`, consumes the CLI's
+structured event stream, and shows live installer-style progress in one
+scrollable area. The backend owns the subprocess independently of a browser
+connection and supports event replay after reconnection. On successful Run
+Publication, the same page renders the final Audience Portfolio from
+`portfolio.json`. Failed runs resume through the same global CLI and stable run
+ID. Explicitly confirmed cancellation terminates only the subprocess owned by
+that run, retains artifacts and event history, and records a durable terminal UI
+state. Persisted run state lets a restarted backend expose prior failure or
+cancellation facts and offer recovery without filesystem discovery in the
+browser.
+
+The browser connects when the subprocess starts. The CLI flushes each structured
+event, and the backend reads and forwards it incrementally without waiting for a
+module boundary, process exit, or Run Publication. Replay is used only to fill a
+sequence gap after reconnection and does not delay delivery to a connected UI.
+
+The final UI shows audience cards with direction, trend summary, percentage
+change, coverage, commercial interpretation, buying-power assessment, the
+limitation note, and a plain empty state. Operational and agent audit detail does
+not appear in the final cards. Failed runs retain their progress history and can
+resume through the same global CLI and `run_id`.
 
 V2 stores minimal derived evidence rather than V1's complete raw response and
 similarity artifact set. Cross-run caching, navigation templates, cross-cluster
@@ -73,10 +107,18 @@ merging, and uncertain-trend display are deferred.
   reasoning while preserving isolated, monotonic component membership.
 - Independently runnable modules improve recovery and experimentation but
   require stable artifact schemas between stages.
+- The interactive UI remains a replaceable consumer of the CLI event and
+  `portfolio.json` contracts; it does not become a sixth pipeline
+  implementation.
+- Long-running local runs remain observable across browser reconnects, while
+  process lifecycle and resume behavior stay owned by the backend and CLI.
+- FastAPI adds a local application server and subprocess-lifecycle boundary that
+  must default to loopback and validate run identifiers and CLI arguments.
 - The result is less replayable than V1 because raw content, singleton records,
   embeddings, and full pairwise matrices are intentionally not retained.
-- V1 implementation and documentation remain historical references until V2 is
-  implemented and becomes the active README contract.
+- V1 research and ADR-0001 remain historical records only; the V1
+  implementation, schemas, CLI, fixtures, tests, and active documentation are
+  retired.
 
 ## Rejected alternatives
 
@@ -111,3 +153,11 @@ experiment.
 
 Rejected as too strict for development. V2 requires at least four successful
 days in each window and normalizes unequal coverage to a seven-day equivalent.
+
+### Use a static HTML report as the V2 UI
+
+Rejected because a static report cannot start or resume the long-running CLI,
+stream module progress, preserve installer-style failure context, or transition
+from execution to results in one experience. The interactive UI renders the
+published `portfolio.json` contract after following the structured CLI event
+stream.

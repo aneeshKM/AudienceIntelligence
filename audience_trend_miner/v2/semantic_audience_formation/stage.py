@@ -1,0 +1,323 @@
+from __future__ import annotations
+
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Literal
+
+import jsonschema
+
+from audience_trend_miner.v2.semantic_audience_formation.categories import (
+    CATEGORY_RULE_SET_VERSION,
+    CategorySelection,
+    select_categories,
+)
+from audience_trend_miner.v2.semantic_audience_formation.clustering import (
+    CATEGORY_WEIGHT,
+    CONTENT_WEIGHT,
+    EmbeddingAdapter,
+    SubdivisionPolicy,
+    form_preliminary_clusters,
+)
+from audience_trend_miner.v2.shared import (
+    ARTIFACT_SCHEMA_VERSION,
+    BoundedProgress,
+    ProgressEvent,
+    ProgressSink,
+    V2ContractError,
+    atomic_write_json,
+    canonical_json_fingerprint,
+    consume_artifact,
+    validate_artifact,
+    validate_schema,
+)
+from audience_trend_miner.v2.wikimedia_evidence import consume_wikimedia_evidence
+
+
+STAGE = "semantic-audience-formation"
+SCHEMA_PATH = Path(__file__).with_name("schemas") / "semantic-audience-formation.schema.json"
+DEFAULT_REVIEW_CAP = 10
+ReviewCapValue = int | Literal["all"]
+
+
+# Parse the configured Cluster Adjudication review budget.
+def parse_review_cap(value: object) -> ReviewCapValue:
+    """Parse the configured Cluster Adjudication review budget."""
+    if value == "all":
+        return "all"
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    if (
+        not isinstance(value, str)
+        or not value
+        or not value.isascii()
+        or not value.isdecimal()
+    ):
+        raise V2ContractError("review cap must be a positive integer or 'all'")
+    parsed = int(value)
+    if parsed <= 0:
+        raise V2ContractError("review cap must be a positive integer or 'all'")
+    return parsed
+
+
+# Validate Wikimedia Evidence and form deterministic Selected Categories.
+def execute_category_selection(
+    *,
+    run_id: str,
+    output_root: Path,
+    progress_sink: ProgressSink,
+    wikimedia_evidence_path: Path | None = None,
+    event_progress: BoundedProgress | None = None,
+) -> CategorySelection:
+    """Validate Wikimedia Evidence and form deterministic Selected Categories."""
+    # Downstream semantic work only begins from a completed, compatible evidence file.
+    evidence_path = wikimedia_evidence_path or (
+        output_root / run_id / "wikimedia-evidence.json"
+    )
+    artifact = consume_wikimedia_evidence(evidence_path, run_id=run_id)
+    payload = artifact["payload"]
+    assert isinstance(payload, dict)
+    canonical_pages = payload["canonical_pages"]
+    assert isinstance(canonical_pages, list)
+    # Category selection is code-owned and deterministic; no model is involved here.
+    selection = select_categories(canonical_pages)
+    page_count = len(selection.pages)
+    progress_sink(
+        ProgressEvent(
+            run_id=run_id,
+            sequence=1,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            module=STAGE,
+            operation="select-categories",
+            level="info",
+            message=(
+                "selected meaningful categories with rule set "
+                f"{CATEGORY_RULE_SET_VERSION}"
+            ),
+            progress=event_progress
+            or BoundedProgress(page_count, max(page_count, 1)),
+        )
+    )
+    return selection
+
+
+# Form, cap, and atomically publish Preliminary Cluster evidence.
+def execute_preliminary_clustering(
+    *,
+    run_id: str,
+    output_root: Path,
+    progress_sink: ProgressSink,
+    embedding_adapter: EmbeddingAdapter,
+    threshold: float,
+    review_cap: ReviewCapValue = DEFAULT_REVIEW_CAP,
+    wikimedia_evidence_path: Path | None = None,
+) -> Path:
+    """Form, cap, and atomically publish Preliminary Cluster evidence."""
+    # Effective configuration includes upstream identity, making resume drift visible.
+    review_cap = parse_review_cap(review_cap)
+    evidence_path = wikimedia_evidence_path or (
+        output_root / run_id / "wikimedia-evidence.json"
+    )
+    wikimedia_artifact = consume_wikimedia_evidence(evidence_path, run_id=run_id)
+    subdivision_policy = SubdivisionPolicy()
+    requested_configuration = _formation_configuration(
+        embedding_model=embedding_adapter.model,
+        threshold=threshold,
+        subdivision_policy=subdivision_policy,
+        review_cap=review_cap,
+        wikimedia_evidence_fingerprint=_semantic_evidence_fingerprint(
+            wikimedia_artifact
+        ),
+    )
+    artifact_path = output_root / run_id / f"{STAGE}.json"
+    # A completed artifact is reusable only when its schema and full configuration match.
+    if artifact_path.exists():
+        completed = consume_artifact(artifact_path, run_id=run_id, stage=STAGE)
+        try:
+            validate_schema(SCHEMA_PATH, completed["payload"])
+        except jsonschema.ValidationError as error:
+            raise V2ContractError(
+                f"Semantic Audience Formation is schema-incompatible: {error.message}"
+            ) from error
+        payload = completed["payload"]
+        assert isinstance(payload, dict)
+        if payload["configuration"] != requested_configuration:
+            raise V2ContractError(
+                "completed Semantic Audience Formation artifact conflicts with "
+                "requested configuration"
+            )
+        progress_sink(
+            ProgressEvent(
+                run_id=run_id,
+                sequence=1,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                module=STAGE,
+                operation="resume",
+                level="info",
+                message="resumed compatible completed Semantic Audience Formation",
+                progress=BoundedProgress(1, 1),
+            )
+        )
+        return artifact_path
+
+    # With no reusable output, run each bounded formation phase in dependency order.
+    selection = execute_category_selection(
+        run_id=run_id,
+        output_root=output_root,
+        progress_sink=progress_sink,
+        wikimedia_evidence_path=wikimedia_evidence_path,
+        event_progress=BoundedProgress(1, 7),
+    )
+    sequence = 1
+
+    # Emit formation progress.
+    def emit_formation_progress(operation: str, message: str) -> None:
+        nonlocal sequence
+        sequence += 1
+        progress_sink(
+            ProgressEvent(
+                run_id=run_id,
+                sequence=sequence,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                module=STAGE,
+                operation=operation,
+                level="info",
+                message=message,
+                progress=BoundedProgress(sequence, 7),
+            )
+        )
+
+    result = form_preliminary_clusters(
+        selection.pages,
+        embedding_adapter,
+        threshold=threshold,
+        subdivision_policy=subdivision_policy,
+        progress=emit_formation_progress,
+    )
+    # The review cap limits model work after ranking, never the clustering universe.
+    selected_clusters = (
+        result.preliminary_clusters
+        if review_cap == "all"
+        else result.preliminary_clusters[:review_cap]
+    )
+    eligible_count = len(result.preliminary_clusters)
+    selected_count = len(selected_clusters)
+    emit_formation_progress(
+        "select-review-cap",
+        f"selected {selected_count} of {eligible_count} eligible Preliminary Clusters "
+        f"with review cap {review_cap!r}",
+    )
+    # Persist only interpretable evidence and subdivision provenance, never vectors.
+    payload = {
+        "configuration": requested_configuration,
+        "counts": {
+            "eligible_clusters": eligible_count,
+            "selected_clusters": selected_count,
+            "omitted_clusters": eligible_count - selected_count,
+            "discarded_singleton_components": result.singleton_count,
+            "subdivided_components": result.subdivided_component_count,
+            "subdivisions_created": result.subdivision_count,
+            "singleton_subdivisions": result.singleton_subdivision_count,
+        },
+        "preliminary_clusters": [
+            {
+                "cohesion": cluster.cohesion,
+                "subdivision": (
+                    {
+                        "source_component_page_ids": list(
+                            cluster.source_component_page_ids
+                        ),
+                        "similarity_threshold": cluster.subdivision_threshold,
+                    }
+                    if cluster.subdivision_threshold is not None
+                    else None
+                ),
+                "members": [
+                    {
+                        "page_id": member.page_id,
+                        "canonical_title": member.canonical_title,
+                        "lead": member.lead,
+                        "selected_categories": list(member.selected_categories),
+                    }
+                    for member in cluster.members
+                ],
+            }
+            for cluster in selected_clusters
+        ],
+        "completion": {"status": "complete"},
+    }
+    artifact = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "stage": STAGE,
+        "status": "complete",
+        "payload": payload,
+    }
+    try:
+        # Validate the exact payload before the atomic write makes completion observable.
+        validate_schema(SCHEMA_PATH, payload)
+    except jsonschema.ValidationError as error:
+        raise V2ContractError(
+            f"Semantic Audience Formation is schema-invalid: {error.message}"
+        ) from error
+    validate_artifact(artifact, run_id=run_id, stage=STAGE)
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(artifact_path, artifact)
+    progress_sink(
+        ProgressEvent(
+            run_id=run_id,
+            sequence=7,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            module=STAGE,
+            operation="publish",
+            level="info",
+            message=(
+                f"published {selected_count} of {eligible_count} eligible "
+                "Preliminary Clusters"
+            ),
+            progress=BoundedProgress(7, 7),
+        )
+    )
+    return artifact_path
+
+
+# Build the effective formation-stage configuration.
+def _formation_configuration(
+    *,
+    embedding_model: str,
+    threshold: float,
+    subdivision_policy: SubdivisionPolicy,
+    review_cap: ReviewCapValue,
+    wikimedia_evidence_fingerprint: str,
+) -> dict[str, object]:
+    return {
+        "category_rule_set_version": CATEGORY_RULE_SET_VERSION,
+        "embedding_model": embedding_model,
+        "content_weight": CONTENT_WEIGHT,
+        "category_weight": CATEGORY_WEIGHT,
+        "similarity_threshold": threshold,
+        "subdivision_policy": asdict(subdivision_policy),
+        "review_cap": review_cap,
+        "wikimedia_evidence_fingerprint": wikimedia_evidence_fingerprint,
+    }
+
+
+# Fingerprint semantic evidence used across stages.
+def _semantic_evidence_fingerprint(artifact: dict[str, object]) -> str:
+    payload = artifact["payload"]
+    assert isinstance(payload, dict)
+    canonical_pages = payload["canonical_pages"]
+    assert isinstance(canonical_pages, list)
+    semantic_evidence = sorted(
+        (
+            {
+                "page_id": page["page_id"],
+                "canonical_title": page["canonical_title"],
+                "lead": page["lead"],
+                "categories": sorted(set(page["categories"])),
+            }
+            for page in canonical_pages
+        ),
+        key=lambda page: (page["page_id"], page["canonical_title"]),
+    )
+    return canonical_json_fingerprint(semantic_evidence)

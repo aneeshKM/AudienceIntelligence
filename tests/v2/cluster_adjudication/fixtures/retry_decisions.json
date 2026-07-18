@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "model": "fixture/retry-model",
+  "clusters": [
+    {
+      "page_ids": [401, 402],
+      "responses": {
+        "proposer": [
+          {"delivery_error": "temporary provider failure"},
+          {"delivery_error": "temporary provider failure"},
+          {
+            "groups": [{"name": "Air Care", "page_ids": [401, 402], "rationale": "Shared products."}],
+            "rejected": []
+          }
+        ],
+        "critic": [{"approved": true, "challenges": []}],
+        "reviser": []
+      }
+    },
+    {
+      "page_ids": [501, 502],
+      "responses": {
+        "proposer": [
+          {
+            "groups": [{"name": "Cooling", "page_ids": [501, 502], "rationale": "Shared products."}],
+            "rejected": []
+          }
+        ],
+        "critic": [
+          {"delivery_error": "provider unavailable"},
+          {"delivery_error": "provider unavailable"},
+          {"delivery_error": "provider unavailable"}
+        ],
+        "reviser": []
+      }
+    }
+  ]
+}

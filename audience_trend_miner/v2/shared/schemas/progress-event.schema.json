@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "sequence", "timestamp", "module", "operation", "level", "message"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "sequence": {"type": "integer", "minimum": 1},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "module": {"type": "string", "minLength": 1},
+    "operation": {"type": "string", "minLength": 1},
+    "level": {"enum": ["info", "warning", "error"]},
+    "message": {"type": "string", "minLength": 1},
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "total"],
+      "properties": {
+        "current": {"type": "integer", "minimum": 0},
+        "total": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "stage": "fixture-stage",
+  "payload": {
+    "candidate_count": 2
+  }
+}

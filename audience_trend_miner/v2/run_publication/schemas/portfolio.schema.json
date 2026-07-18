@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "as_of_date", "nominal_windows", "audience_portfolio", "completion"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "as_of_date": {"type": "string", "format": "date"},
+    "nominal_windows": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous", "current"],
+      "properties": {
+        "previous": {"$ref": "#/$defs/window"},
+        "current": {"$ref": "#/$defs/window"}
+      }
+    },
+    "audience_portfolio": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {"$ref": "#/$defs/audience"}
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "empty"],
+      "properties": {
+        "status": {"const": "complete"},
+        "empty": {"type": "boolean"}
+      }
+    }
+  },
+  "$defs": {
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "string", "format": "date"},
+        "end": {"type": "string", "format": "date"}
+      }
+    },
+    "windowTraffic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed_total", "observed_page_days", "successful_days", "conservative_observed_minimum", "conservative_observed_maximum", "seven_day_equivalent", "minimum", "maximum"],
+      "properties": {
+        "observed_total": {"type": "integer", "minimum": 0},
+        "observed_page_days": {"type": "integer", "minimum": 0},
+        "successful_days": {"type": "integer", "minimum": 1},
+        "conservative_observed_minimum": {"type": "integer", "minimum": 0},
+        "conservative_observed_maximum": {"type": "integer", "minimum": 0},
+        "seven_day_equivalent": {"type": "number", "minimum": 0},
+        "minimum": {"type": "number", "minimum": 0},
+        "maximum": {"type": "number", "minimum": 0}
+      }
+    },
+    "traffic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous", "current"],
+      "properties": {
+        "previous": {"$ref": "#/$defs/windowTraffic"},
+        "current": {"$ref": "#/$defs/windowTraffic"}
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous", "current"],
+      "properties": {
+        "previous": {"type": "number", "minimum": 0, "maximum": 1},
+        "current": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "narrative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "summary", "commercial_interpretation", "brand_categories", "buying_power_rating", "buying_power_rationale"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "summary": {"type": "string", "minLength": 1},
+        "commercial_interpretation": {"type": "string", "minLength": 1},
+        "brand_categories": {"type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "buying_power_rating": {"enum": ["high", "medium", "low"]},
+        "buying_power_rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "audience": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cluster_id", "source_preliminary_cluster_id", "direction", "traffic", "percentage_change", "coverage", "confidence", "impact_score", "narrative"],
+      "properties": {
+        "cluster_id": {"type": "string", "minLength": 1},
+        "source_preliminary_cluster_id": {"type": "string", "minLength": 1},
+        "direction": {"enum": ["robust_growth", "robust_shrinking", "sudden_growth"]},
+        "traffic": {"$ref": "#/$defs/traffic"},
+        "percentage_change": {"type": ["number", "null"]},
+        "coverage": {"$ref": "#/$defs/coverage"},
+        "confidence": {"enum": ["robust", "observed"]},
+        "impact_score": {"type": "number", "minimum": 0},
+        "narrative": {"$ref": "#/$defs/narrative"}
+      }
+    }
+  }
+}

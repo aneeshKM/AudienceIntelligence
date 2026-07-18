@@ -10,11 +10,20 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "certifi>=2025.1.31",
-  "groq>=1.5,<2",
+  "fastapi>=0.116,<1",
   "jsonschema>=4.23,<5",
+  "langchain-core>=1.4,<2",
+  "langchain-groq>=1.1,<2",
+  "langgraph>=1.2,<2",
+  "numpy>=1.26,<3",
   "psycopg[binary]>=3.2,<4",
+  "python-dotenv>=1,<2",
   "sentence-transformers>=5,<6",
+  "uvicorn>=0.35,<1",
 ]
+
+[project.optional-dependencies]
+browser-test = ["playwright>=1.53,<2"]
 
 [project.scripts]
 audience-trend-miner = "audience_trend_miner.__main__:main"
@@ -23,4 +32,4 @@ audience-trend-miner = "audience_trend_miner.__main__:main"
 include = ["audience_trend_miner*"]
 
 [tool.setuptools.package-data]
-audience_trend_miner = ["schemas/*.json"]
+audience_trend_miner = ["v2/**/*.json", "v2/ui/static/*"]

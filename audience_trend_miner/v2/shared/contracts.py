@@ -1,0 +1,317 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import tempfile
+from typing import Callable, Mapping
+
+import jsonschema
+
+
+SCHEMA_DIRECTORY = Path(__file__).with_name("schemas")
+RUN_CONFIGURATION_NAME = "run.json"
+ARTIFACT_SCHEMA_VERSION = "2.0"
+PROGRESS_SCHEMA_VERSION = "1.0"
+
+
+# Report deterministic input, schema, or provenance contract violations.
+class V2ContractError(ValueError):
+    """A V2 run, progress, or artifact contract was violated."""
+
+
+# Describe one stage operation and its position in a bounded sequence.
+@dataclass(frozen=True)
+class BoundedProgress:
+    current: int
+    total: int
+
+    # Validate the initialized BoundedProgress.
+    def __post_init__(self) -> None:
+        if self.total <= 0 or not 0 <= self.current <= self.total:
+            raise V2ContractError("progress must be bounded by a positive total")
+
+
+# Represent the shared event envelope emitted by every V2 stage.
+@dataclass(frozen=True)
+class ProgressEvent:
+    run_id: str
+    sequence: int
+    timestamp: str
+    module: str
+    operation: str
+    level: str
+    message: str
+    progress: BoundedProgress | None = None
+    schema_version: str = PROGRESS_SCHEMA_VERSION
+
+    # Validate the initialized ProgressEvent.
+    def __post_init__(self) -> None:
+        validate_identifier(self.run_id, "run_id")
+        validate_identifier(self.module, "module")
+        if self.sequence <= 0:
+            raise V2ContractError("event sequence must be positive")
+        if self.level not in {"info", "warning", "error"}:
+            raise V2ContractError("event level is unsupported")
+
+    # Convert this value into artifact data.
+    def record(self) -> dict[str, object]:
+        record = asdict(self)
+        if self.progress is None:
+            record.pop("progress")
+        _validate("progress-event.schema.json", record)
+        return record
+
+
+ProgressSink = Callable[[ProgressEvent], None]
+
+
+# Create a human-readable progress sink.
+def human_progress_sink(stream: object) -> ProgressSink:
+    # Render and flush one progress event.
+    def render(event: ProgressEvent) -> None:
+        suffix = (
+            f" ({event.progress.current}/{event.progress.total})"
+            if event.progress
+            else ""
+        )
+        print(
+            f"[{event.module}:{event.operation}] {event.message}{suffix}",
+            file=stream,
+            flush=True,
+        )
+
+    return _monotonic_sink(render)
+
+
+# Create a newline-delimited JSON progress sink.
+def json_progress_sink(stream: object) -> ProgressSink:
+    # Render and flush one progress event.
+    def render(event: ProgressEvent) -> None:
+        print(
+            json.dumps(event.record(), separators=(",", ":"), sort_keys=True),
+            file=stream,
+            flush=True,
+        )
+
+    return _monotonic_sink(render)
+
+
+# Enforce monotonic sequence numbers for a progress sink.
+def _monotonic_sink(render: ProgressSink) -> ProgressSink:
+    # Sequences are tracked per run so one process may safely report multiple runs.
+    last_sequence_by_run: dict[str, int] = {}
+
+    # Emit the next bounded progress event.
+    def emit(event: ProgressEvent) -> None:
+        previous = last_sequence_by_run.get(event.run_id, 0)
+        if event.sequence <= previous:
+            raise V2ContractError("event sequence must increase monotonically")
+        render(event)
+        last_sequence_by_run[event.run_id] = event.sequence
+
+    return emit
+
+
+# Exercise the shared V2 stage boundary with deterministic domain data.
+def execute_fixture_stage(
+    *,
+    run_id: str,
+    configuration: Mapping[str, str],
+    output_root: Path,
+    fixture_path: Path,
+    progress_sink: ProgressSink,
+    consume_existing: bool = False,
+    interrupt_before_completion: bool = False,
+) -> Path:
+    """Exercise the shared V2 stage boundary with deterministic domain data."""
+    # This small stage exercises the same configuration and atomic-artifact contracts
+    # used by every production module.
+    validate_identifier(run_id, "run_id")
+    fixture = _load_fixture(fixture_path)
+    stage = fixture["stage"]
+    run_directory = output_root / run_id
+    run_directory.mkdir(parents=True, exist_ok=True)
+    record_run_configuration(run_directory, run_id, configuration)
+    artifact_path = run_directory / f"{stage}.json"
+    # Consumers see only artifacts that already crossed the complete boundary.
+    if consume_existing:
+        consume_artifact(artifact_path, run_id=run_id, stage=stage)
+        return artifact_path
+
+    _emit(progress_sink, run_id, 1, stage, "load", "loading fixture", 1, 2)
+    artifact = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "stage": stage,
+        "status": "complete",
+        "payload": fixture["payload"],
+    }
+    validate_artifact(artifact, run_id=run_id, stage=stage)
+    atomic_write_json(
+        artifact_path,
+        artifact,
+        interrupt_before_replace=interrupt_before_completion,
+    )
+    _emit(
+        progress_sink, run_id, 2, stage, "publish", "published artifact", 2, 2
+    )
+    return artifact_path
+
+
+# Record run configuration.
+def record_run_configuration(
+    run_directory: Path, run_id: str, configuration: Mapping[str, str]
+) -> None:
+    # The first writer establishes immutable run facts; later stages verify equality.
+    record = {"schema_version": "1.0", "run_id": run_id, "configuration": dict(configuration)}
+    path = run_directory / RUN_CONFIGURATION_NAME
+    if not path.exists():
+        # Hard-link publication prevents two starters from silently replacing facts.
+        try:
+            atomic_write_json(path, record, refuse_replace=True)
+        except FileExistsError:
+            pass
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise V2ContractError("recorded run configuration is unreadable") from error
+    if existing != record:
+        raise V2ContractError("run configuration conflicts with recorded facts")
+
+
+# Consume artifact.
+def consume_artifact(path: Path, *, run_id: str, stage: str) -> dict[str, object]:
+    # Status is checked before domain use so partial writes are never consumable.
+    try:
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise V2ContractError("artifact is absent") from error
+    except json.JSONDecodeError as error:
+        raise V2ContractError("artifact is invalid") from error
+    if artifact.get("status") != "complete":
+        raise V2ContractError("artifact is incomplete")
+    validate_artifact(artifact, run_id=run_id, stage=stage)
+    return artifact
+
+
+# Validate the shared artifact envelope and exact run/stage ownership.
+def validate_artifact(
+    artifact: object, *, run_id: str, stage: str
+) -> None:
+    # The shared envelope schema is followed by exact run/stage provenance checks.
+    try:
+        _validate("stage-artifact.schema.json", artifact)
+    except jsonschema.ValidationError as error:
+        raise V2ContractError(f"artifact is schema-invalid: {error.message}") from error
+    assert isinstance(artifact, dict)
+    if artifact["run_id"] != run_id or artifact["stage"] != stage:
+        raise V2ContractError("artifact belongs to different run facts")
+
+
+# Forward a progress event when a sink is configured.
+def _emit(
+    sink: ProgressSink,
+    run_id: str,
+    sequence: int,
+    module: str,
+    operation: str,
+    message: str,
+    current: int,
+    total: int,
+) -> None:
+    sink(
+        ProgressEvent(
+            run_id=run_id,
+            sequence=sequence,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            module=module,
+            operation=operation,
+            level="info",
+            message=message,
+            progress=BoundedProgress(current, total),
+        )
+    )
+
+
+# Load and validate a shared-stage fixture document.
+def _load_fixture(path: Path) -> dict[str, object]:
+    try:
+        fixture = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise V2ContractError("fixture is unreadable") from error
+    if not isinstance(fixture, dict) or set(fixture) != {"schema_version", "stage", "payload"}:
+        raise V2ContractError("fixture has an invalid shape")
+    if fixture["schema_version"] != "1.0" or not isinstance(fixture["payload"], dict):
+        raise V2ContractError("fixture has an incompatible schema")
+    validate_identifier(fixture["stage"], "stage")
+    return fixture
+
+
+# Reject identifiers that could escape or alias an artifact directory.
+def validate_identifier(value: object, name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value in {".", ".."}
+        or Path(value).name != value
+    ):
+        raise V2ContractError(f"{name} must be one safe path segment")
+    return value
+
+
+# Atomically write a JSON artifact and sync it to disk.
+def atomic_write_json(
+    path: Path,
+    content: object,
+    *,
+    interrupt_before_replace: bool = False,
+    refuse_replace: bool = False,
+) -> None:
+    # Write, flush, and fsync a sibling temporary file before the atomic replacement.
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.stem}.", suffix=".tmp"
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(content, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        if interrupt_before_replace:
+            raise V2ContractError("fixture interrupted before artifact completion")
+        # Hard-link mode creates once; replace mode atomically updates an owned artifact.
+        if refuse_replace:
+            os.link(temporary_path, path)
+        else:
+            os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+# Return a stable SHA-256 identity for JSON-compatible evidence.
+def canonical_json_fingerprint(content: object) -> str:
+    """Return a stable SHA-256 identity for JSON-compatible evidence."""
+    encoded = json.dumps(
+        content,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+# Raise a contract error for the first schema violation.
+def _validate(schema_name: str, instance: object) -> None:
+    validate_schema(SCHEMA_DIRECTORY / schema_name, instance)
+
+
+# Validate an instance against an owning module's packaged JSON schema.
+def validate_schema(schema_path: Path, instance: object) -> None:
+    """Validate an instance against an owning module's packaged JSON schema."""
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance, schema)

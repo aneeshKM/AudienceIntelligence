@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["as_of_date", "nominal_windows", "nominal_days", "coverage", "candidate_universe", "canonical_pages", "daily_cutoffs", "provenance", "exclusions", "completion"],
+  "properties": {
+    "as_of_date": {"type": "string", "format": "date"},
+    "nominal_windows": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous", "current"],
+      "properties": {
+        "previous": {"$ref": "#/$defs/window"},
+        "current": {"$ref": "#/$defs/window"}
+      }
+    },
+    "nominal_days": {
+      "type": "array",
+      "minItems": 14,
+      "maxItems": 14,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "window", "status"],
+        "properties": {
+          "date": {"type": "string", "format": "date"},
+          "window": {"enum": ["previous", "current"]},
+          "status": {"enum": ["successful", "unavailable"]}
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous", "current"],
+      "properties": {
+        "previous": {"type": "integer", "minimum": 4, "maximum": 7},
+        "current": {"type": "integer", "minimum": 4, "maximum": 7}
+      }
+    },
+    "candidate_universe": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "canonical_pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["page_id", "canonical_title", "lead", "categories", "aliases", "observations"],
+        "properties": {
+          "page_id": {"type": "integer"},
+          "canonical_title": {"type": "string", "minLength": 1},
+          "lead": {"type": "string", "maxLength": 600},
+          "categories": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "aliases": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+          "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}}
+        }
+      }
+    },
+    "daily_cutoffs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "views_ceil"],
+        "properties": {
+          "date": {"type": "string", "format": "date"},
+          "views_ceil": {"type": ["integer", "null"], "minimum": 0}
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "country", "project", "traffic_measure", "category_visibility"],
+      "properties": {
+        "source": {"type": "string", "minLength": 1},
+        "country": {"const": "US"},
+        "project": {"const": "en.wikipedia"},
+        "traffic_measure": {"const": "views_ceil"},
+        "category_visibility": {"const": "non-hidden"}
+      }
+    },
+    "exclusions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["non_en_wikipedia_records", "unavailable_days", "metadata_pages_unavailable", "main_page", "internal_namespaces"],
+      "properties": {
+        "non_en_wikipedia_records": {"type": "integer", "minimum": 0},
+        "unavailable_days": {"type": "array", "items": {"type": "string", "format": "date"}, "uniqueItems": true},
+        "metadata_pages_unavailable": {"type": "integer", "minimum": 0},
+        "main_page": {"type": "integer", "minimum": 0},
+        "internal_namespaces": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}}
+      }
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "minimum_successful_days_per_window"],
+      "properties": {
+        "status": {"const": "complete"},
+        "minimum_successful_days_per_window": {"const": 4}
+      }
+    }
+  },
+  "$defs": {
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "string", "format": "date"},
+        "end": {"type": "string", "format": "date"}
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "views_ceil"],
+      "properties": {
+        "date": {"type": "string", "format": "date"},
+        "views_ceil": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "stage_evidence"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "stage_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wikimedia-evidence", "semantic-audience-formation", "cluster-adjudication", "trend-portfolio"],
+      "properties": {
+        "wikimedia-evidence": {"type": "object"},
+        "semantic-audience-formation": {"type": "object"},
+        "cluster-adjudication": {"type": "object"},
+        "trend-portfolio": {"type": "object"}
+      }
+    }
+  }
+}

@@ -1,0 +1,1 @@
+"""Run Publication contract tests."""

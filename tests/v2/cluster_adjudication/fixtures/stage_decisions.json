@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.0",
+  "model": "fixture/cluster-model",
+  "clusters": [
+    {
+      "page_ids": [101, 102],
+      "responses": {
+        "proposer": [
+          {
+            "groups": [
+              {
+                "name": "Home Air Purification",
+                "page_ids": [101, 102],
+                "rationale": "Shared interest in residential air-cleaning products."
+              }
+            ],
+            "rejected": []
+          }
+        ],
+        "critic": [{"approved": true, "challenges": []}],
+        "reviser": []
+      }
+    },
+    {
+      "page_ids": [201, 202, 203, 204, 205],
+      "responses": {
+        "proposer": [
+          {
+            "groups": [
+              {
+                "name": "Home Climate Systems",
+                "page_ids": [201, 202, 203, 204],
+                "rationale": "Initial broad home climate audience."
+              }
+            ],
+            "rejected": [{"page_id": 205, "reason": "routine_politics"}]
+          }
+        ],
+        "critic": [
+          {
+            "approved": false,
+            "challenges": [
+              {
+                "dimension": "semantic_coherence",
+                "message": "Separate air cleaning from heating and cooling.",
+                "page_ids": [201, 202, 203, 204],
+                "required_action": "revise"
+              }
+            ]
+          }
+        ],
+        "reviser": [
+          {
+            "groups": [
+              {
+                "name": "Home Air Purification",
+                "page_ids": [201, 202],
+                "rationale": "Residential air-cleaning products."
+              },
+              {
+                "name": "Efficient Home Climate",
+                "page_ids": [203, 204],
+                "rationale": "Residential heating and cooling products."
+              }
+            ],
+            "rejected": [{"page_id": 205, "reason": "routine_politics"}]
+          }
+        ]
+      }
+    },
+    {
+      "page_ids": [301, 302],
+      "responses": {
+        "proposer": [
+          {
+            "groups": [],
+            "rejected": [
+              {"page_id": 301, "reason": "violent_crime"},
+              {"page_id": 302, "reason": "violent_crime"}
+            ]
+          }
+        ],
+        "critic": [{"approved": true, "challenges": []}],
+        "reviser": []
+      }
+    }
+  ]
+}

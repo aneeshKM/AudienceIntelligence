@@ -5,6 +5,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 
 
+# Verify: database url.
 def test_database_url() -> str:
     configured = os.environ.get("TEST_DATABASE_URL")
     if configured:
@@ -33,6 +34,7 @@ def test_database_url() -> str:
     )
 
 
+# Return dotenv database url.
 def _dotenv_database_url() -> str | None:
     path = Path(".env")
     if not path.is_file():

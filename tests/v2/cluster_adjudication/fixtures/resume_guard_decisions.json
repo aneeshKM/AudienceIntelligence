@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "model": "fixture/cluster-model",
+  "clusters": [
+    {
+      "page_ids": [101, 102],
+      "responses": {
+        "proposer": [{"delivery_error": "completed cluster was repeated"}],
+        "critic": [],
+        "reviser": []
+      }
+    },
+    {
+      "page_ids": [201, 202, 203, 204, 205],
+      "responses": {
+        "proposer": [{"delivery_error": "completed cluster was repeated"}],
+        "critic": [],
+        "reviser": []
+      }
+    },
+    {
+      "page_ids": [301, 302],
+      "responses": {
+        "proposer": [{"delivery_error": "completed cluster was repeated"}],
+        "critic": [],
+        "reviser": []
+      }
+    }
+  ]
+}

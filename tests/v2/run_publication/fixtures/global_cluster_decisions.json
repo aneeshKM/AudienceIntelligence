@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "model": "fixture/global-cluster-model",
+  "clusters": [
+    {
+      "page_ids": [42, 84],
+      "responses": {
+        "proposer": [
+          {
+            "groups": [
+              {
+                "name": "Canonical topics",
+                "page_ids": [42, 84],
+                "rationale": "The fixture pages form one coherent topic group."
+              }
+            ],
+            "rejected": []
+          }
+        ],
+        "critic": [{"approved": true, "challenges": []}],
+        "reviser": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "proposal": {
+    "groups": [
+      {
+        "name": "Home Air Purification",
+        "page_ids": [101, 102],
+        "rationale": "Residential air-cleaning products and standards."
+      },
+      {
+        "name": "Residential Climate Control",
+        "page_ids": [103, 104],
+        "rationale": "Consumer interest in household cooling systems."
+      }
+    ],
+    "rejected": [
+      {
+        "page_id": 105,
+        "reason": "routine_politics"
+      }
+    ]
+  }
+}
