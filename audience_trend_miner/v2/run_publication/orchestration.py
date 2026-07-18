@@ -18,6 +18,7 @@ StageAction = Callable[[ProgressSink], Path]
 GLOBAL_RUN_CONFIGURATION_NAME = "global-run.json"
 
 
+# Bundle the five stage entry points so orchestration is replaceable in tests.
 @dataclass(frozen=True)
 class GlobalRunStages:
     """The five public module interfaces required for one global run."""
@@ -29,6 +30,7 @@ class GlobalRunStages:
     run_publication: StageAction
 
 
+# Execute the five V2 modules in dependency order with one event sequence.
 def execute_global_run(
     *,
     run_id: str,
@@ -38,8 +40,10 @@ def execute_global_run(
     stages: GlobalRunStages,
 ) -> Path:
     """Execute the five V2 modules in dependency order with one event sequence."""
+    # Stage-local event sequences are rewritten into one monotonically increasing stream.
     sequence = 0
 
+    # Emit the next bounded progress event.
     def emit(event: ProgressEvent) -> None:
         nonlocal sequence
         if event.run_id != run_id:
@@ -47,6 +51,7 @@ def execute_global_run(
         sequence += 1
         progress_sink(replace(event, sequence=sequence))
 
+    # Immutable global configuration prevents a run ID from changing effective inputs.
     try:
         _record_global_configuration(
             run_directory,
@@ -58,6 +63,7 @@ def execute_global_run(
         raise
 
     publication: Path | None = None
+    # Dependency order is explicit: each stage consumes the completed artifact above it.
     ordered_stages = (
         ("wikimedia-evidence", stages.wikimedia_evidence),
         ("semantic-audience-formation", stages.semantic_audience_formation),
@@ -65,6 +71,7 @@ def execute_global_run(
         ("trend-portfolio", stages.trend_portfolio),
         ("run-publication", stages.run_publication),
     )
+    # Stop at the first contract failure and emit one structured terminal event.
     for module, action in ordered_stages:
         try:
             publication = action(emit)
@@ -77,6 +84,7 @@ def execute_global_run(
     return publication
 
 
+# Record global configuration.
 def _record_global_configuration(
     run_directory: Path,
     *,
@@ -103,6 +111,7 @@ def _record_global_configuration(
         raise V2ContractError("global run configuration conflicts with recorded facts")
 
 
+# Build a structured module-failure event.
 def _failure_event(
     run_id: str,
     module: str,

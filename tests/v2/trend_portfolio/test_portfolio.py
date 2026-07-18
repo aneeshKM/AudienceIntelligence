@@ -12,6 +12,7 @@ from audience_trend_miner.v2.trend_portfolio import (
 )
 
 
+# Build one seven-day traffic-window fixture.
 def _window(*, views: float, minimum: float | None = None) -> WindowTraffic:
     resolved_minimum = views if minimum is None else minimum
     return WindowTraffic(
@@ -26,6 +27,7 @@ def _window(*, views: float, minimum: float | None = None) -> WindowTraffic:
     )
 
 
+# Build one cluster-traffic fixture for portfolio ranking.
 def _trend(
     cluster_id: str,
     *,
@@ -46,7 +48,9 @@ def _trend(
     )
 
 
+# Group tests for audience portfolio behavior.
 class AudiencePortfolioTest(unittest.TestCase):
+    # Verify: qualifies robust directions and ranks by symmetric impact.
     def test_qualifies_robust_directions_and_ranks_by_symmetric_impact(self) -> None:
         growing = _trend(
             "growing",
@@ -106,6 +110,7 @@ class AudiencePortfolioTest(unittest.TestCase):
             (growing, uncertain, small_but_robust, shrinking, malformed),
         )
 
+    # Verify: caps change and selects top ten with stable ties.
     def test_caps_change_and_selects_top_ten_with_stable_ties(self) -> None:
         tied = [
             _trend(
@@ -130,6 +135,7 @@ class AudiencePortfolioTest(unittest.TestCase):
             math.log(1_048_576) * 10,
         )
 
+    # Verify: no qualifying cluster produces empty portfolio.
     def test_no_qualifying_cluster_produces_empty_portfolio(self) -> None:
         qualification = qualify_and_rank_portfolio(
             (

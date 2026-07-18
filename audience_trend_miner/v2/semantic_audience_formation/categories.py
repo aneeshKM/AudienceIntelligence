@@ -24,6 +24,7 @@ CATEGORY_NOISE_PATTERNS = (
 _CATEGORY_NOISE = tuple(re.compile(pattern) for pattern in CATEGORY_NOISE_PATTERNS)
 
 
+# Hold the category evidence retained for one canonical page.
 @dataclass(frozen=True)
 class SelectedCategoryPage:
     page_id: int
@@ -32,6 +33,7 @@ class SelectedCategoryPage:
     selected_categories: tuple[str, ...]
 
 
+# Separate selected pages from audited noise exclusions.
 @dataclass(frozen=True)
 class CategorySelection:
     pages: tuple[SelectedCategoryPage, ...]
@@ -40,8 +42,10 @@ class CategorySelection:
     category_idf: Mapping[str, float]
 
 
+# Select meaningful category evidence across the full Canonical Page universe.
 def select_categories(pages: Sequence[Mapping[str, object]]) -> CategorySelection:
     """Select meaningful category evidence across the full Canonical Page universe."""
+    # Remove audited maintenance categories before computing corpus-wide statistics.
     meaningful_by_page: list[tuple[Mapping[str, object], set[str]]] = []
     document_frequency: dict[str, int] = {}
     for page in pages:
@@ -55,10 +59,12 @@ def select_categories(pages: Sequence[Mapping[str, object]]) -> CategorySelectio
             document_frequency[category] = document_frequency.get(category, 0) + 1
 
     total_pages = len(pages)
+    # IDF favors categories that distinguish a page from the whole candidate universe.
     category_idf = {
         category: math.log(total_pages / frequency)
         for category, frequency in document_frequency.items()
     }
+    # Keep at most five rare, meaningful categories with deterministic tie ordering.
     selected_pages = tuple(
         SelectedCategoryPage(
             page_id=int(page["page_id"]),
@@ -74,6 +80,7 @@ def select_categories(pages: Sequence[Mapping[str, object]]) -> CategorySelectio
             meaningful_by_page, key=lambda item: int(item[0]["page_id"])
         )
     )
+    # Persist the rule description alongside results for reproducibility and audit.
     rule_set: Mapping[str, object] = MappingProxyType(
         {
             "version": CATEGORY_RULE_SET_VERSION,
@@ -89,5 +96,6 @@ def select_categories(pages: Sequence[Mapping[str, object]]) -> CategorySelectio
     )
 
 
+# Check whether noise.
 def _is_noise(category: str) -> bool:
     return any(pattern.search(category) for pattern in _CATEGORY_NOISE)

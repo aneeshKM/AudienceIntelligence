@@ -70,6 +70,7 @@ FORBIDDEN_KEYS = frozenset(
 )
 
 
+# Validate the final contract exposed to downstream product consumers.
 def validate_completed_publication(
     directory: Path,
     *,
@@ -89,6 +90,7 @@ def validate_completed_publication(
         raise V2ContractError("publication belongs to a different As-of Date")
 
 
+# Validate one completed run and atomically expose its final contract.
 def execute_run_publication(
     *,
     run_id: str,
@@ -99,6 +101,7 @@ def execute_run_publication(
     fail_after_artifact: int | None = None,
 ) -> Path:
     """Validate one completed run and atomically expose its final contract."""
+    # Publication re-reads every upstream artifact rather than trusting stage status.
     validate_identifier(run_id, "run_id")
     run_directory = output_root / run_id
     publication_directory = run_directory / "publication"
@@ -115,6 +118,7 @@ def execute_run_publication(
         )
         for stage in UPSTREAM_STAGES
     }
+    # Recompute deterministic traffic independently to detect plausible-looking tampering.
     expected_traffic = attach_cluster_traffic(
         run_id=run_id,
         wikimedia_evidence_path=resolved_paths["wikimedia-evidence"],
@@ -123,6 +127,7 @@ def execute_run_publication(
     _ensure_safe(artifacts)
     _validate_upstream(artifacts, expected_traffic)
 
+    # The public symlink is the completion marker; an existing target must fully match.
     if os.path.lexists(publication_directory):
         _validate_existing_publication(publication_directory, run_id, artifacts)
         _emit(
@@ -145,8 +150,10 @@ def execute_run_publication(
         1,
         3,
     )
+    # Product and audit views are assembled only after all cross-stage checks pass.
     portfolio, audit = _assemble_products(run_id, artifacts)
     run_directory.mkdir(parents=True, exist_ok=True)
+    # Build the exact artifact set in an unobservable sibling staging directory.
     staging_directory = Path(
         tempfile.mkdtemp(prefix=".publication.", dir=run_directory)
     )
@@ -163,6 +170,7 @@ def execute_run_publication(
             if fail_after_artifact == index:
                 raise V2ContractError("publication write failed")
 
+        # The manifest binds final files to their upstream evidence fingerprints.
         manifest = _manifest(run_id, artifacts, portfolio, staging_directory)
         validate_schema(FINAL_SCHEMAS["manifest.json"], manifest)
         atomic_write_json(staging_directory / "manifest.json", manifest)
@@ -180,6 +188,8 @@ def execute_run_publication(
         )
         if interrupt_before_completion:
             raise V2ContractError("publication interrupted before completion")
+        # Rename creates an immutable completed directory; the symlink swap is the
+        # single atomic action that exposes it to readers.
         os.rename(staging_directory, completed_directory)
         completed_owned = True
         try:
@@ -193,6 +203,7 @@ def execute_run_publication(
         published = True
         _sync_directory(run_directory)
     finally:
+        # Interrupted or colliding publication attempts never leave partial products.
         _remove_staging_directory(staging_directory)
         if completed_owned and not published:
             _remove_staging_directory(completed_directory)
@@ -209,10 +220,12 @@ def execute_run_publication(
     return publication_directory
 
 
+# Validate schemas, fingerprint links, run facts, and cross-stage membership.
 def _validate_upstream(
     artifacts: dict[str, dict[str, object]],
     expected_traffic: tuple[ClusterTraffic, ...],
 ) -> None:
+    # Owning schemas reject structurally valid envelopes with invalid stage payloads.
     for stage, artifact in artifacts.items():
         try:
             validate_schema(UPSTREAM_SCHEMAS[stage], artifact["payload"])
@@ -234,6 +247,7 @@ def _validate_upstream(
     adjudication_configuration = _mapping(adjudication_payload["configuration"])
     trend_configuration = _mapping(trend_payload["configuration"])
 
+    # Fingerprint links prove these artifacts were produced from one dependency chain.
     if (
         formation_configuration["wikimedia_evidence_fingerprint"]
         != _semantic_evidence_fingerprint(evidence)
@@ -246,6 +260,7 @@ def _validate_upstream(
     ):
         raise V2ContractError("upstream artifacts are incompatible")
 
+    # Date windows are repeated in the trend stage and must agree exactly.
     expected_run_facts = {
         "as_of_date": evidence_payload["as_of_date"],
         "nominal_windows": evidence_payload["nominal_windows"],
@@ -261,6 +276,7 @@ def _validate_upstream(
     )
 
 
+# Validate counts and membership.
 def _validate_counts_and_membership(
     evidence: dict[str, object],
     formation: dict[str, object],
@@ -268,6 +284,7 @@ def _validate_counts_and_membership(
     trend: dict[str, object],
     expected_traffic: tuple[ClusterTraffic, ...],
 ) -> None:
+    # Formation counts establish the expected preliminary-cluster identity sequence.
     preliminary = _list_of_mappings(formation["preliminary_clusters"])
     formation_counts = _mapping(formation["counts"])
     if (
@@ -278,6 +295,7 @@ def _validate_counts_and_membership(
     ):
         raise V2ContractError("Semantic Audience Formation counts are inconsistent")
 
+    # Adjudication must preserve every selected page in exactly one terminal state.
     final_clusters = _list_of_mappings(adjudication["final_audience_clusters"])
     rejected = _list_of_mappings(adjudication["rejected_members"])
     adjudications = _list_of_mappings(adjudication["adjudications"])
@@ -338,6 +356,7 @@ def _validate_counts_and_membership(
     ):
         raise V2ContractError("Cluster Adjudication terminal provenance is inconsistent")
 
+    # Portfolio, narrative, and traffic records must agree on cluster identity/order.
     portfolio = _list_of_mappings(trend["audience_portfolio"])
     narratives = _list_of_mappings(trend["narrative_evidence"])
     traffic = _list_of_mappings(trend["audit_cluster_traffic"])
@@ -373,6 +392,7 @@ def _validate_counts_and_membership(
     )
 
 
+# Validate cross stage values.
 def _validate_cross_stage_values(
     evidence: dict[str, object],
     preliminary: list[dict[str, object]],
@@ -383,6 +403,7 @@ def _validate_cross_stage_values(
     expected_traffic: tuple[ClusterTraffic, ...],
     narrative_model: str,
 ) -> None:
+    # Rebuild the page-evidence chain from Wikimedia through preliminary clusters.
     canonical_pages = {
         page["page_id"]: page
         for page in _list_of_mappings(evidence["canonical_pages"])
@@ -405,6 +426,7 @@ def _validate_cross_stage_values(
                 )
             preliminary_members[member["page_id"]] = member
 
+    # Final cluster members must be byte-for-byte copies of formation evidence.
     final_by_id: dict[object, dict[str, object]] = {}
     for cluster in final_clusters:
         final_by_id[cluster["cluster_id"]] = cluster
@@ -414,6 +436,7 @@ def _validate_cross_stage_values(
                     "Cluster Adjudication member evidence is inconsistent"
                 )
 
+    # Recomputed traffic is authoritative; persisted arithmetic is not trusted.
     traffic_by_id = {record["cluster_id"]: record for record in traffic}
     if traffic != [_traffic_record(record) for record in expected_traffic]:
         raise V2ContractError("Trend Portfolio traffic evidence is inconsistent")
@@ -431,6 +454,7 @@ def _validate_cross_stage_values(
         ):
             raise V2ContractError("Trend Portfolio traffic evidence is inconsistent")
 
+    # Recompute qualification, ranking, coverage, and change before accepting products.
     narrative_by_id = {record["cluster_id"]: record for record in narratives}
     qualification = qualify_and_rank_portfolio(expected_traffic)
     expected_trends = qualification.portfolio.audience_trends
@@ -490,6 +514,7 @@ def _validate_cross_stage_values(
             raise V2ContractError("Trend Portfolio product facts are inconsistent")
 
 
+# Serialize cluster traffic evidence.
 def _traffic_record(traffic: ClusterTraffic) -> dict[str, object]:
     return {
         "cluster_id": traffic.cluster_id,
@@ -503,6 +528,7 @@ def _traffic_record(traffic: ClusterTraffic) -> dict[str, object]:
     }
 
 
+# Assemble the final product-facing audience records.
 def _assemble_products(
     run_id: str, artifacts: dict[str, dict[str, object]]
 ) -> tuple[dict[str, object], dict[str, object]]:
@@ -532,6 +558,7 @@ def _assemble_products(
     return portfolio, audit
 
 
+# Build auditable evidence for one completed stage.
 def _audit_stage_evidence(
     stage: str, payload: dict[str, object]
 ) -> dict[str, object]:
@@ -549,18 +576,21 @@ def _audit_stage_evidence(
     return evidence
 
 
+# Build the publication integrity manifest.
 def _manifest(
     run_id: str,
     artifacts: dict[str, dict[str, object]],
     portfolio: dict[str, object],
     staging_directory: Path,
 ) -> dict[str, object]:
+    # The manifest intentionally hashes every published artifact except itself.
     evidence = _payload(artifacts["wikimedia-evidence"])
     return {
         "schema_version": "1.0",
         "run_id": run_id,
         "as_of_date": portfolio["as_of_date"],
         "nominal_windows": portfolio["nominal_windows"],
+        # Preserve effective stage configurations so the publication is explainable.
         "configuration_provenance": {
             "wikimedia-evidence": evidence["provenance"],
             **{
@@ -587,6 +617,7 @@ def _manifest(
     }
 
 
+# Validate existing publication.
 def _validate_existing_publication(
     directory: Path,
     run_id: str,
@@ -600,6 +631,7 @@ def _validate_existing_publication(
         ) from error
 
 
+# Validate staged publication.
 def _validate_staged_publication(
     directory: Path,
     run_id: str,
@@ -622,6 +654,7 @@ def _validate_staged_publication(
         raise V2ContractError("manifest provenance is internally inconsistent")
 
 
+# Load completed publication.
 def _load_completed_publication(
     directory: Path, run_id: str
 ) -> dict[str, dict[str, object]]:
@@ -657,6 +690,7 @@ def _load_completed_publication(
     return products
 
 
+# Calculate integrity metadata for one module artifact.
 def _module_integrity(
     artifacts: dict[str, dict[str, object]],
 ) -> dict[str, object]:
@@ -670,6 +704,7 @@ def _module_integrity(
     }
 
 
+# Fingerprint semantic evidence used across stages.
 def _semantic_evidence_fingerprint(artifact: dict[str, object]) -> str:
     payload = _payload(artifact)
     pages = _list_of_mappings(payload["canonical_pages"])
@@ -688,6 +723,7 @@ def _semantic_evidence_fingerprint(artifact: dict[str, object]) -> str:
     return canonical_json_fingerprint(evidence)
 
 
+# Reject forbidden secret or hidden-reasoning keys anywhere in publication data.
 def _ensure_safe(value: object) -> None:
     if isinstance(value, dict):
         for key, nested in value.items():
@@ -702,26 +738,31 @@ def _ensure_safe(value: object) -> None:
             _ensure_safe(nested)
 
 
+# Require an artifact payload mapping.
 def _payload(artifact: dict[str, object]) -> dict[str, object]:
     return _mapping(artifact["payload"])
 
 
+# Require a mapping value.
 def _mapping(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         raise V2ContractError("artifact contains an invalid object")
     return value
 
 
+# Require a list containing only mappings.
 def _list_of_mappings(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
         raise V2ContractError("artifact contains an invalid collection")
     return cast(list[dict[str, object]], value)
 
 
+# Calculate a file SHA-256 fingerprint.
 def _file_fingerprint(path: Path) -> str:
     return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
 
 
+# Remove staging directory.
 def _remove_staging_directory(path: Path) -> None:
     if not path.exists():
         return
@@ -730,6 +771,7 @@ def _remove_staging_directory(path: Path) -> None:
     path.rmdir()
 
 
+# Flush directory metadata to durable storage.
 def _sync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY)
     try:
@@ -738,6 +780,7 @@ def _sync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+# Forward a progress event when a sink is configured.
 def _emit(
     sink: ProgressSink,
     run_id: str,

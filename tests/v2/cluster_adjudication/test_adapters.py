@@ -10,35 +10,45 @@ from audience_trend_miner.v2.cluster_adjudication.adapters import (
 from audience_trend_miner.v2.shared import V2ContractError
 
 
+# Provide the fake structured runnable test double.
 class _FakeStructuredRunnable:
+    # Initialize the _FakeStructuredRunnable.
     def __init__(self, output: object) -> None:
         self.output = output
         self.messages: object = None
 
+    # Return the scripted structured-provider response.
     def invoke(self, messages: object) -> object:
         self.messages = messages
         return self.output
 
 
+# Provide the fake chat model test double.
 class _FakeChatModel:
+    # Initialize the _FakeChatModel.
     def __init__(self, output: object) -> None:
         self.runnable = _FakeStructuredRunnable(output)
         self.schema: object = None
         self.options: dict[str, object] = {}
 
+    # Return with structured output.
     def with_structured_output(self, schema: object, **options: object) -> _FakeStructuredRunnable:
         self.schema = schema
         self.options = options
         return self.runnable
 
 
+# Provide the invalid structured chat model test double.
 class _InvalidStructuredChatModel:
+    # Return with structured output.
     def with_structured_output(self, schema: object, **options: object) -> object:
         del schema, options
         raise ValueError("unsupported structured output schema")
 
 
+# Provide the permission denied runnable test double.
 class _PermissionDeniedRunnable:
+    # Raise the scripted provider permission failure.
     def invoke(self, messages: object) -> object:
         del messages
         error = RuntimeError("model blocked at project level")
@@ -46,13 +56,17 @@ class _PermissionDeniedRunnable:
         raise error
 
 
+# Provide the permission denied chat model test double.
 class _PermissionDeniedChatModel:
+    # Return with structured output.
     def with_structured_output(self, schema: object, **options: object) -> object:
         del schema, options
         return _PermissionDeniedRunnable()
 
 
+# Group tests for lang chain groq adjudication adapter behavior.
 class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
+    # Verify: project blocked model is a fatal configuration error.
     def test_project_blocked_model_is_a_fatal_configuration_error(self) -> None:
         adapter = LangChainGroqAdjudicationAdapter(
             model="groq/compound-mini",
@@ -70,6 +84,7 @@ class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
                 )
             )
 
+    # Verify: invalid provider contract is a fatal configuration error.
     def test_invalid_provider_contract_is_a_fatal_configuration_error(self) -> None:
         adapter = LangChainGroqAdjudicationAdapter(
             model="openai/gpt-oss-20b",
@@ -87,6 +102,7 @@ class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
                 )
             )
 
+    # Verify: adapter selects supported structured output contract by model.
     def test_adapter_selects_supported_structured_output_contract_by_model(self) -> None:
         scenarios = (
             (
@@ -127,6 +143,7 @@ class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
                 self.assertEqual(chat_model.schema["title"], "ClusterDecision")
                 self.assertEqual(chat_model.options, expected_options)
 
+    # Verify: compound json mode receives the exact schema in its prompt.
     def test_compound_json_mode_receives_the_exact_schema_in_its_prompt(self) -> None:
         parsed = {"approved": True, "challenges": []}
         chat_model = _FakeChatModel(
@@ -149,6 +166,7 @@ class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
         self.assertIn("Return only one JSON object", messages[0].content)
         self.assertIn('"approved":{"type":"boolean"}', messages[0].content)
 
+    # Verify: adapter requests provider schema without exposing disallowed evidence.
     def test_adapter_requests_provider_schema_without_exposing_disallowed_evidence(self) -> None:
         parsed = {
             "groups": [
@@ -193,6 +211,7 @@ class LangChainGroqAdjudicationAdapterTest(unittest.TestCase):
         self.assertNotIn("traffic", json.dumps(model_payload).lower())
         self.assertNotIn("chain-of-thought", json.dumps(model_payload).lower())
 
+    # Verify: schema parse failure is returned for deterministic validation.
     def test_schema_parse_failure_is_returned_for_deterministic_validation(self) -> None:
         raw_message = type("RawMessage", (), {"content": "not valid JSON"})()
         chat_model = _FakeChatModel(

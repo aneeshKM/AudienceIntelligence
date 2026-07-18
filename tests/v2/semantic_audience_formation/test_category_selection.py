@@ -6,7 +6,9 @@ import unittest
 from audience_trend_miner.v2.semantic_audience_formation import select_categories
 
 
+# Group tests for selected category behavior.
 class SelectedCategoryTest(unittest.TestCase):
+    # Verify: filters audited noise and ranks top five by whole universe idf.
     def test_filters_audited_noise_and_ranks_top_five_by_whole_universe_idf(self) -> None:
         pages = [
             {

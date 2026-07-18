@@ -42,6 +42,7 @@ STAGE = "trend-portfolio"
 SCHEMA_PATH = Path(__file__).with_name("schemas") / "trend-portfolio.schema.json"
 
 
+# Attach, qualify, narrate, and atomically publish one Audience Portfolio.
 def execute_trend_portfolio_stage(
     *,
     run_id: str,
@@ -53,6 +54,7 @@ def execute_trend_portfolio_stage(
     interrupt_before_completion: bool = False,
 ) -> Path:
     """Attach, qualify, narrate, and atomically publish one Audience Portfolio."""
+    # Load both upstream contracts and bind the configuration to their fingerprints.
     run_directory = output_root / run_id
     evidence_path = wikimedia_evidence_path or run_directory / "wikimedia-evidence.json"
     adjudication_path = (
@@ -97,6 +99,7 @@ def execute_trend_portfolio_stage(
     failure_path = run_directory / f".{STAGE}.failure.json"
     sequence = 0
 
+    # Emit the next bounded progress event.
     def emit(operation: str, message: str, current: int, total: int) -> None:
         nonlocal sequence
         sequence += 1
@@ -113,6 +116,7 @@ def execute_trend_portfolio_stage(
             )
         )
 
+    # Traffic attachment and portfolio qualification are deterministic code-owned work.
     traffic = attach_cluster_traffic(
         run_id=run_id,
         wikimedia_evidence_path=evidence_path,
@@ -121,6 +125,7 @@ def execute_trend_portfolio_stage(
     qualification = qualify_and_rank_portfolio(traffic)
     selected = qualification.portfolio.audience_trends
 
+    # Completed output is resumable only after facts are recomputed and compared.
     if artifact_path.exists():
         artifact = consume_artifact(artifact_path, run_id=run_id, stage=STAGE)
         _validate_payload(artifact["payload"])
@@ -144,6 +149,7 @@ def execute_trend_portfolio_stage(
     emit("qualification", f"qualified {len(selected)} directional clusters", 1, 1)
     emit("ranking", f"ranked and selected {len(selected)} clusters", 1, 1)
 
+    # A checkpoint contains only validated narratives for the current configuration.
     completed = _load_checkpoint(
         checkpoint_path,
         run_id=run_id,
@@ -152,6 +158,7 @@ def execute_trend_portfolio_stage(
         source_clusters=source_clusters,
     )
     total = max(len(selected), 1)
+    # Generate each narrative in isolation so one failure cannot corrupt earlier work.
     for index in range(len(completed), len(selected)):
         trend = selected[index]
         cluster_id = trend.final_cluster_traffic.cluster_id
@@ -166,6 +173,7 @@ def execute_trend_portfolio_stage(
                 evidence,
             )
         except NarrativeExhausted as error:
+            # Persist bounded failure evidence separately; never publish invalid copy.
             atomic_write_json(
                 failure_path,
                 {
@@ -194,6 +202,7 @@ def execute_trend_portfolio_stage(
                 "attempts": [attempt.record() for attempt in attempts],
             },
         }
+        # Checkpoint immediately after validation to make interruption recovery exact.
         completed.append(record)
         atomic_write_json(
             checkpoint_path,
@@ -211,6 +220,7 @@ def execute_trend_portfolio_stage(
             total,
         )
 
+    # Published facts remain code-owned; the model contributes only bounded copy fields.
     payload = {
         "configuration": configuration,
         "run_facts": run_facts,
@@ -232,6 +242,7 @@ def execute_trend_portfolio_stage(
     }
     validate_artifact(artifact, run_id=run_id, stage=STAGE)
     run_directory.mkdir(parents=True, exist_ok=True)
+    # The complete artifact is the only public stage boundary; checkpoints stay hidden.
     atomic_write_json(
         artifact_path,
         artifact,
@@ -243,6 +254,7 @@ def execute_trend_portfolio_stage(
     return artifact_path
 
 
+# Serialize narrative model evidence.
 def _model_evidence(
     trend: AudienceTrend,
     members: list[dict[str, object]],
@@ -257,6 +269,7 @@ def _model_evidence(
     }
 
 
+# Assemble one published portfolio item.
 def _portfolio_item(
     trend: AudienceTrend, narrative: dict[str, object]
 ) -> dict[str, object]:
@@ -269,6 +282,7 @@ def _portfolio_item(
     }
 
 
+# Build code-owned facts for narrative generation.
 def _deterministic_facts(trend: AudienceTrend) -> dict[str, object]:
     traffic = trend.final_cluster_traffic
     previous = traffic.previous.seven_day_equivalent
@@ -295,6 +309,7 @@ def _deterministic_facts(trend: AudienceTrend) -> dict[str, object]:
     }
 
 
+# Serialize cluster traffic evidence.
 def _traffic_record(traffic: ClusterTraffic) -> dict[str, object]:
     return {
         "cluster_id": traffic.cluster_id,
@@ -308,6 +323,7 @@ def _traffic_record(traffic: ClusterTraffic) -> dict[str, object]:
     }
 
 
+# Load a compatible prefix of completed narrative records.
 def _load_checkpoint(
     path: Path,
     *,
@@ -316,6 +332,7 @@ def _load_checkpoint(
     selected: tuple[AudienceTrend, ...],
     source_clusters: dict[str, dict[str, object]],
 ) -> list[dict[str, object]]:
+    # Resume accepts only a prefix of the currently selected ranked cluster sequence.
     if not path.exists():
         return []
     try:
@@ -332,6 +349,7 @@ def _load_checkpoint(
         or len(checkpoint["completed"]) > len(selected)
     ):
         raise V2ContractError("Trend Portfolio checkpoint conflicts with requested configuration")
+    # Cluster ordering is part of provenance because it determines adapter selection.
     expected_ids = [
         trend.final_cluster_traffic.cluster_id for trend in selected
     ]
@@ -355,6 +373,7 @@ def _load_checkpoint(
     return completed
 
 
+# Validate a Trend Portfolio payload against its owning schema.
 def _validate_payload(payload: object) -> None:
     try:
         validate_schema(SCHEMA_PATH, payload)
@@ -364,6 +383,7 @@ def _validate_payload(payload: object) -> None:
         ) from error
 
 
+# Validate completed facts.
 def _validate_completed_facts(
     payload: dict[str, object],
     run_facts: dict[str, object],
@@ -400,6 +420,7 @@ def _validate_completed_facts(
         )
 
 
+# Validate completed record.
 def _validate_completed_record(
     trend: AudienceTrend,
     record: dict[str, object],
@@ -408,6 +429,7 @@ def _validate_completed_record(
     *,
     conflict_message: str,
 ) -> None:
+    # Reconstruct both deterministic product facts and the exact model input.
     if set(record) != {"cluster_id", "portfolio_item", "evidence"}:
         raise V2ContractError(conflict_message)
     item = record["portfolio_item"]
@@ -425,6 +447,7 @@ def _validate_completed_record(
         cast(list[dict[str, object]], members),
     )
     attempts = evidence.get("attempts")
+    # One compound gate prevents any plausible but inconsistent checkpoint from resuming.
     if (
         record["cluster_id"] != cluster_id
         or item != expected_item
@@ -440,11 +463,13 @@ def _validate_completed_record(
         raise V2ContractError(conflict_message)
 
 
+# Check that recorded narrative attempts form a valid sequence.
 def _attempts_are_consistent(
     attempts: object,
     narrative: dict[str, object],
     model_input: dict[str, object],
 ) -> bool:
+    # Attempt evidence must be contiguous, bounded, and end at the first valid output.
     if not isinstance(attempts, list) or not 1 <= len(attempts) <= 3:
         return False
     for number, attempt in enumerate(attempts, start=1):
@@ -460,6 +485,7 @@ def _attempts_are_consistent(
         delivery = attempt["delivery_status"]
         validation = attempt["validation_status"]
         errors = attempt["errors"]
+        # Recompute validation errors rather than trusting persisted status labels.
         if delivery == "error":
             if validation != "not_run" or attempt["output"] is not None or not errors:
                 return False
@@ -477,6 +503,7 @@ def _attempts_are_consistent(
     return cast(dict[str, object], attempts[-1])["validation_status"] == "valid"
 
 
+# Return an installed package version or an unknown marker.
 def _package_version(package: str) -> str:
     try:
         return version(package)

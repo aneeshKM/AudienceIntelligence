@@ -13,6 +13,7 @@ PREVIOUS_DAYS = [f"2026-07-{day:02d}" for day in range(2, 6)]
 CURRENT_DAYS = [f"2026-07-{day:02d}" for day in range(9, 16)]
 
 
+# Build one final-cluster member fixture.
 def _member(page_id: int) -> dict[str, object]:
     return {
         "page_id": page_id,
@@ -22,6 +23,7 @@ def _member(page_id: int) -> dict[str, object]:
     }
 
 
+# Publish compatible evidence and adjudication fixtures for traffic tests.
 def _artifacts(root: Path, *, run_id: str = "trend-run") -> tuple[Path, Path]:
     run_directory = root / run_id
     run_directory.mkdir(parents=True)
@@ -183,7 +185,9 @@ def _artifacts(root: Path, *, run_id: str = "trend-run") -> tuple[Path, Path]:
     return evidence_path, adjudication_path
 
 
+# Group tests for cluster traffic behavior.
 class ClusterTrafficTest(unittest.TestCase):
+    # Verify: zero observed previous week with current views is sudden growth.
     def test_zero_observed_previous_week_with_current_views_is_sudden_growth(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             evidence_path, adjudication_path = _artifacts(Path(temporary_directory))
@@ -206,6 +210,7 @@ class ClusterTrafficTest(unittest.TestCase):
             self.assertGreater(trends[0].current.observed_total, 0)
             self.assertEqual(trends[0].direction, "sudden_growth")
 
+    # Verify: attaches censored traffic and classifies non overlapping ranges.
     def test_attaches_censored_traffic_and_classifies_non_overlapping_ranges(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             evidence_path, adjudication_path = _artifacts(Path(temporary_directory))
@@ -231,6 +236,7 @@ class ClusterTrafficTest(unittest.TestCase):
             self.assertEqual(growing.current.maximum, 2800)
             self.assertEqual(trends[2].previous.maximum, trends[2].current.minimum)
 
+    # Verify: mathematically touching unequal windows remain uncertain.
     def test_mathematically_touching_unequal_windows_remain_uncertain(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             evidence_path, adjudication_path = _artifacts(Path(temporary_directory))
@@ -286,6 +292,7 @@ class ClusterTrafficTest(unittest.TestCase):
             self.assertEqual(touching.current.minimum, 1960)
             self.assertEqual(touching.direction, "uncertain_direction")
 
+    # Verify: rejects duplicate terminal membership before traffic is attached.
     def test_rejects_duplicate_terminal_membership_before_traffic_is_attached(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             evidence_path, adjudication_path = _artifacts(Path(temporary_directory))
@@ -302,6 +309,7 @@ class ClusterTrafficTest(unittest.TestCase):
                     cluster_adjudication_path=adjudication_path,
                 )
 
+    # Verify: rejects artifacts from different runs and missing cutoff evidence.
     def test_rejects_artifacts_from_different_runs_and_missing_cutoff_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

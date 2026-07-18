@@ -34,18 +34,23 @@ STAGE = "cluster-adjudication"
 SCHEMA_PATH = Path(__file__).with_name("schemas") / "cluster-adjudication.schema.json"
 
 
+# Define how the stage obtains an adapter for each preliminary cluster.
 class StageAdapterFactory(Protocol):
+    # Identify the model recorded in the stage configuration.
     @property
     def model(self) -> str: ...
 
+    # Identify the provider integration recorded in the stage configuration.
     @property
     def integration_name(self) -> str: ...
 
+    # Build the adapter used to adjudicate one preliminary cluster.
     def adapter_for(
         self, cluster_index: int, preliminary_cluster: dict[str, object]
     ) -> AdjudicationAdapter: ...
 
 
+# Store resumable adjudication output with its source-component identity.
 class CompletedClusterRecord(TypedDict):
     preliminary_cluster_id: str
     final_audience_clusters: list[dict[str, object]]
@@ -53,6 +58,7 @@ class CompletedClusterRecord(TypedDict):
     adjudication: dict[str, object]
 
 
+# Adjudicate all preliminary clusters and atomically publish the stage artifact.
 def execute_cluster_adjudication_stage(
     *,
     run_id: str,
@@ -63,6 +69,7 @@ def execute_cluster_adjudication_stage(
     interrupt_before_completion: bool = False,
 ) -> Path:
     """Adjudicate every selected Preliminary Cluster and publish atomically."""
+    # The formation fingerprint binds this stage to one exact selected-cluster input.
     formation_path = semantic_formation_path or (
         output_root / run_id / "semantic-audience-formation.json"
     )
@@ -106,6 +113,7 @@ def execute_cluster_adjudication_stage(
     total_clusters = len(typed_clusters)
     progress_total = max(total_clusters, 1)
 
+    # Emit one ordered, bounded progress event for the current cluster.
     def emit(operation: str, message: str, cluster_number: int) -> None:
         nonlocal sequence
         sequence += 1
@@ -122,6 +130,7 @@ def execute_cluster_adjudication_stage(
             )
         )
 
+    # Completed output is reusable only after schema, configuration, and membership checks.
     if artifact_path.exists():
         completed_artifact = consume_artifact(
             artifact_path, run_id=run_id, stage=STAGE
@@ -145,6 +154,7 @@ def execute_cluster_adjudication_stage(
     final_clusters: list[dict[str, object]] = []
     rejected_members: list[dict[str, object]] = []
     adjudications: list[dict[str, object]] = []
+    # Rehydrate already validated cluster records before requesting any new model work.
     completed_records = _load_checkpoint(
         checkpoint_path,
         run_id=run_id,
@@ -161,11 +171,13 @@ def execute_cluster_adjudication_stage(
             len(adjudications),
         )
 
+    # Each preliminary cluster is an isolated resumable unit of adjudication.
     for cluster_index in range(len(completed_records), total_clusters):
         preliminary_cluster = typed_clusters[cluster_index]
         cluster_number = cluster_index + 1
         preliminary_cluster_id = f"preliminary-cluster-{cluster_number:04d}"
 
+        # Translate a graph model-step update into stage progress.
         def report_step(step: ModelStepRecord) -> None:
             emit(
                 step.role,
@@ -180,6 +192,7 @@ def execute_cluster_adjudication_stage(
             adapter_factory.adapter_for(cluster_index, preliminary_cluster),
             step_progress=report_step,
         )
+        # Assign stable global final-cluster IDs only after graph validation succeeds.
         completed_groups: list[dict[str, object]] = []
         for group in result.accepted_groups:
             completed_groups.append(
@@ -214,6 +227,7 @@ def execute_cluster_adjudication_stage(
         final_clusters.extend(completed_groups)
         rejected_members.extend(completed_rejections)
         adjudications.append(completed_adjudication)
+        # Checkpoint after every cluster so provider calls never need to be repeated.
         atomic_write_json(
             checkpoint_path,
             {
@@ -227,6 +241,7 @@ def execute_cluster_adjudication_stage(
     accepted_page_count = sum(
         len(cast(list[object], cluster["members"])) for cluster in final_clusters
     )
+    # The final artifact separates product membership from auditable model-step evidence.
     payload = {
         "configuration": configuration,
         "counts": {
@@ -256,6 +271,7 @@ def execute_cluster_adjudication_stage(
     }
     validate_artifact(artifact, run_id=run_id, stage=STAGE)
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    # Atomic replacement is the completion boundary; the hidden checkpoint is then stale.
     atomic_write_json(
         artifact_path,
         artifact,
@@ -266,6 +282,7 @@ def execute_cluster_adjudication_stage(
     return artifact_path
 
 
+# Ensure no page appears in more than one preliminary cluster.
 def _validate_exclusive_input_pages(clusters: list[dict[str, object]]) -> None:
     page_ids: list[object] = []
     for cluster in clusters:
@@ -278,10 +295,12 @@ def _validate_exclusive_input_pages(clusters: list[dict[str, object]]) -> None:
         raise V2ContractError("selected Preliminary Clusters contain duplicate page IDs")
 
 
+# Verify output IDs, provenance, counts, and terminal page membership.
 def _validate_completed_payload(
     preliminary_clusters: list[dict[str, object]],
     payload: dict[str, object],
 ) -> None:
+    # Stable ordered IDs make missing, reordered, or injected records detectable.
     final_clusters = cast(list[dict[str, object]], payload["final_audience_clusters"])
     rejected_members = cast(list[dict[str, object]], payload["rejected_members"])
     adjudications = cast(list[dict[str, object]], payload["adjudications"])
@@ -306,6 +325,7 @@ def _validate_completed_payload(
         raise V2ContractError(
             "Cluster Adjudication provenance does not match Preliminary Clusters"
         )
+    # Validate terminal exclusivity independently within every source component.
     for source_id, preliminary_cluster in zip(
         expected_sources, preliminary_clusters, strict=True
     ):
@@ -337,6 +357,7 @@ def _validate_completed_payload(
         raise V2ContractError("Cluster Adjudication counts do not match membership")
 
 
+# Ensure each input page is accepted or rejected exactly once.
 def _validate_component_terminal_membership(
     preliminary_cluster: dict[str, object],
     final_clusters: list[dict[str, object]],
@@ -367,6 +388,7 @@ def _validate_component_terminal_membership(
         raise V2ContractError(f"{context} terminal membership is not exclusive")
 
 
+# Return an installed package version or an unknown marker.
 def _package_version(package: str) -> str:
     try:
         return version(package)
@@ -374,6 +396,7 @@ def _package_version(package: str) -> str:
         return "unknown"
 
 
+# Load and validate resumable records from a compatible checkpoint.
 def _load_checkpoint(
     path: Path,
     *,
@@ -381,6 +404,7 @@ def _load_checkpoint(
     configuration: dict[str, object],
     preliminary_clusters: list[dict[str, object]],
 ) -> list[CompletedClusterRecord]:
+    # A checkpoint is trusted only when its run and complete effective configuration match.
     if not path.exists():
         return []
     try:
@@ -400,6 +424,7 @@ def _load_checkpoint(
             "Cluster Adjudication checkpoint conflicts with requested configuration"
         )
     completed = checkpoint["completed"]
+    # Validate records in prefix order so resumption always continues at one clear index.
     for index, record in enumerate(completed, start=1):
         if (
             not isinstance(record, dict)

@@ -22,6 +22,7 @@ DEFAULT_FIXED_PROMPT_TOKENS = 2_048
 DEFAULT_STRICTER_THRESHOLD_STEP = 0.02
 
 
+# Configure the token guard and stricter-boundary subdivision strategy.
 @dataclass(frozen=True)
 class SubdivisionPolicy:
     max_input_tokens: int = DEFAULT_MAX_MODEL_INPUT_TOKENS
@@ -30,6 +31,7 @@ class SubdivisionPolicy:
     method: str = field(default="stricter-boundary", init=False)
     token_estimation: str = field(default="utf8-bytes-upper-bound", init=False)
 
+    # Validate the initialized SubdivisionPolicy.
     def __post_init__(self) -> None:
         if (
             not isinstance(self.max_input_tokens, int)
@@ -55,14 +57,17 @@ class SubdivisionPolicy:
             )
 
 
+# Define the embedding boundary used by semantic clustering.
 class EmbeddingAdapter(Protocol):
     model: str
 
+    # Generate embedding vectors for the supplied representations.
     def embed(
         self, representations: Sequence[str]
     ) -> Sequence[Sequence[float]] | NDArray[np.float64]: ...
 
 
+# Represent one semantically connected group before adjudication.
 @dataclass(frozen=True)
 class PreliminaryCluster:
     members: tuple[SelectedCategoryPage, ...]
@@ -70,11 +75,13 @@ class PreliminaryCluster:
     source_component_page_ids: tuple[int, ...]
     subdivision_threshold: float | None
 
+    # Return the cluster member page IDs.
     @property
     def page_ids(self) -> tuple[int, ...]:
         return tuple(member.page_id for member in self.members)
 
 
+# Capture clustering output and its reproducibility metadata.
 @dataclass(frozen=True)
 class PreliminaryClusterArtifact:
     embedding_model: str
@@ -88,11 +95,13 @@ class PreliminaryClusterArtifact:
     subdivision_count: int
     singleton_subdivision_count: int
 
+    # Return the minimal serializable evidence produced by fixture formation.
     def record(self) -> dict[str, object]:
         """Return the minimal serializable evidence produced by fixture formation."""
         return asdict(self)
 
 
+# Form and rank Preliminary Clusters without traffic evidence.
 def form_preliminary_clusters(
     pages: Sequence[SelectedCategoryPage],
     embedding_adapter: EmbeddingAdapter,
@@ -102,6 +111,7 @@ def form_preliminary_clusters(
     progress: Callable[[str, str], None] | None = None,
 ) -> PreliminaryClusterArtifact:
     """Form and rank Preliminary Clusters without traffic evidence."""
+    # Stable page ordering makes vector rows, graph nodes, and output ties reproducible.
     if not math.isfinite(threshold) or not -1 <= threshold <= 1:
         raise V2ContractError("similarity threshold must be between -1 and 1")
     ordered_pages = tuple(sorted(pages, key=lambda page: page.page_id))
@@ -113,6 +123,7 @@ def form_preliminary_clusters(
         + (" | ".join(page.selected_categories) or "(none)")
         for page in ordered_pages
     )
+    # Embed content and category evidence separately so each signal keeps its weight.
     content_vectors = _validated_embedding_matrix(
         embedding_adapter.embed(content_representations),
         expected_count=len(ordered_pages),
@@ -130,11 +141,13 @@ def form_preliminary_clusters(
             f"{embedding_adapter.model!r}",
         )
 
+    # Normalized dot products are cosine similarities; clipping absorbs float drift.
     content_similarity = np.clip(content_vectors @ content_vectors.T, -1.0, 1.0)
     category_similarity = np.clip(category_vectors @ category_vectors.T, -1.0, 1.0)
     combined_similarities = (
         CONTENT_WEIGHT * content_similarity + CATEGORY_WEIGHT * category_similarity
     )
+    # An inclusive threshold turns the blended matrix into an undirected graph.
     neighbors = {index: set() for index in range(len(ordered_pages))}
     edge_indices = np.argwhere(
         np.triu(combined_similarities >= threshold, k=1)
@@ -158,6 +171,8 @@ def form_preliminary_clusters(
         ordered_pages,
         subdivision_policy,
     )
+    # Singletons have no audience relationship to adjudicate, while large components
+    # must be subdivided until their complete evidence fits the model input guard.
     reviewable_components: list[
         tuple[ComponentSubdivision, tuple[int, ...]]
     ] = []
@@ -188,6 +203,8 @@ def form_preliminary_clusters(
             f"{subdivision_count} subdivisions using the "
             f"{subdivision_policy.max_input_tokens}-token {subdivision_policy.method} guard",
         )
+    # Preserve source-component provenance so later stages cannot move pages between
+    # semantic components while revising a cluster.
     clusters = [
         PreliminaryCluster(
             members=tuple(
@@ -203,6 +220,7 @@ def form_preliminary_clusters(
         )
         for subdivision, source_component in reviewable_components
     ]
+    # Rank deterministically by cohesion, size, and finally page identity.
     clusters.sort(
         key=lambda cluster: (
             cluster.cohesion is None,
@@ -230,11 +248,13 @@ def form_preliminary_clusters(
     )
 
 
+# Normalize and validate an embedding matrix.
 def _validated_embedding_matrix(
     vectors: Sequence[Sequence[float]] | NDArray[np.float64],
     *,
     expected_count: int,
 ) -> NDArray[np.float64]:
+    # Validate shape before numeric work so malformed adapters fail deterministically.
     if expected_count == 0:
         if len(vectors) != 0:
             raise V2ContractError("embedding count does not match Canonical Page count")
@@ -251,6 +271,7 @@ def _validated_embedding_matrix(
         raise V2ContractError("embeddings must be non-empty")
     if not np.isfinite(matrix).all():
         raise V2ContractError("embeddings must be finite")
+    # Scale before norm calculation to avoid overflow for large finite vectors.
     scales = np.max(np.abs(matrix), axis=1)
     if np.any(scales == 0):
         raise V2ContractError("embeddings must have non-zero magnitude")
@@ -259,6 +280,7 @@ def _validated_embedding_matrix(
     return scaled_matrix / magnitudes[:, np.newaxis]
 
 
+# Calculate mean pairwise similarity for a component.
 def _mean_pairwise_similarity(
     component: Sequence[int], similarities: NDArray[np.float64]
 ) -> float | None:
@@ -269,6 +291,7 @@ def _mean_pairwise_similarity(
     return float(np.mean(pair_values))
 
 
+# Find connected components in a similarity graph.
 def _connected_components(
     indices: Sequence[int], neighbors: dict[int, set[int]]
 ) -> list[tuple[int, ...]]:
@@ -289,18 +312,21 @@ def _connected_components(
     return components
 
 
+# Return accepted subgroups and rejected pages from one component split.
 @dataclass(frozen=True)
 class ComponentSubdivision:
     indices: tuple[int, ...]
     similarity_threshold: float | None
 
 
+# Recursively fit connected components within the model input budget.
 @dataclass(frozen=True)
 class _ComponentSubdivider:
     similarities: NDArray[np.float64]
     pages: Sequence[SelectedCategoryPage]
     policy: SubdivisionPolicy
 
+    # Recursively subdivide a component until it fits the model guard.
     def subdivide(
         self,
         component: tuple[int, ...],
@@ -308,6 +334,7 @@ class _ComponentSubdivider:
         threshold: float,
         subdivision_threshold: float | None = None,
     ) -> list[ComponentSubdivision]:
+        # A component that already fits remains intact and needs no threshold provenance.
         if self._estimated_input_tokens(component) <= self.policy.max_input_tokens:
             return [ComponentSubdivision(component, subdivision_threshold)]
         for index in component:
@@ -317,6 +344,8 @@ class _ComponentSubdivider:
                     "the model-input token guard"
                 )
 
+        # Raising the edge threshold breaks weak semantic bridges without truncating
+        # any page evidence.
         stricter_threshold = min(
             1.0,
             threshold + self.policy.stricter_threshold_step,
@@ -331,6 +360,8 @@ class _ComponentSubdivider:
             neighbors[left].add(right)
             neighbors[right].add(left)
         subdivisions = _connected_components(component, neighbors)
+        # Recurse until the graph separates; exact duplicates at threshold 1.0 are
+        # packed deterministically as the final lossless fallback.
         if len(subdivisions) == 1:
             if stricter_threshold < 1.0:
                 return self.subdivide(
@@ -352,6 +383,7 @@ class _ComponentSubdivider:
             )
         ]
 
+    # Estimate the model input tokens for a group of pages.
     def _estimated_input_tokens(self, component: Sequence[int]) -> int:
         records = (
             json.dumps(
@@ -374,6 +406,7 @@ class _ComponentSubdivider:
             + max(0, len(record_sizes) - 1)
         )
 
+    # Pack inseparable members within the model token budget.
     def _pack_indistinguishable_members(
         self,
         component: tuple[int, ...],

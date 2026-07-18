@@ -13,6 +13,7 @@ from audience_trend_miner.v2.cluster_adjudication.graph import (
 from audience_trend_miner.v2.shared import V2ContractError
 
 
+# Capture one deterministic adjudication request for fixture assertions.
 @dataclass(frozen=True)
 class FrozenAdjudicationCall:
     role: AdjudicationRole
@@ -20,9 +21,11 @@ class FrozenAdjudicationCall:
     model: str
 
 
+# Return fixed proposer, critic, and reviser responses for deterministic runs.
 class FrozenAdjudicationAdapter:
     """Return deterministic role outputs while recording bounded model calls."""
 
+    # Store defensive copies of deterministic outputs for each graph role.
     def __init__(
         self,
         proposal: object,
@@ -39,6 +42,7 @@ class FrozenAdjudicationAdapter:
         }
         self.calls: list[FrozenAdjudicationCall] = []
 
+    # Record the request and return the configured output for its role.
     def invoke(self, request: AdjudicationRequest) -> object:
         self.calls.append(
             FrozenAdjudicationCall(
@@ -50,9 +54,11 @@ class FrozenAdjudicationAdapter:
         return deepcopy(self._outputs[request.role])
 
 
+# Consume a per-role response script, including scripted failures.
 class ScriptedAdjudicationAdapter:
     """Play a sequence of delivered outputs and delivery errors by graph role."""
 
+    # Store a consumable response script for every adjudication role.
     def __init__(
         self,
         responses: dict[AdjudicationRole, list[object]],
@@ -62,6 +68,7 @@ class ScriptedAdjudicationAdapter:
         self.model = model
         self._responses = deepcopy(responses)
 
+    # Consume the next scripted output or raise its scripted delivery error.
     def invoke(self, request: AdjudicationRequest) -> object:
         responses = self._responses[request.role]
         if not responses:
@@ -72,12 +79,14 @@ class ScriptedAdjudicationAdapter:
         return deepcopy(response)
 
 
+# Match preliminary clusters to their fixture-backed adapters.
 @dataclass(frozen=True)
 class FrozenStageAdapterFactory:
     model: str
     _clusters: tuple[dict[str, object], ...]
     integration_name: str = "fixture"
 
+    # Load and validate a deterministic stage fixture from JSON.
     @classmethod
     def from_file(cls, path: Path) -> FrozenStageAdapterFactory:
         try:
@@ -95,6 +104,7 @@ class FrozenStageAdapterFactory:
             raise V2ContractError("adjudication stage fixture has an invalid shape")
         return cls(fixture["model"], tuple(deepcopy(fixture["clusters"])))
 
+    # Build the scripted adapter matching one preliminary cluster.
     def adapter_for(
         self, cluster_index: int, preliminary_cluster: dict[str, object]
     ) -> ScriptedAdjudicationAdapter:
@@ -122,14 +132,17 @@ class FrozenStageAdapterFactory:
         )
 
 
+# Expose one fixed proposal while capturing the model-visible input.
 class FrozenProposalAdapter:
     """Return one deterministic proposal while recording its model-visible input."""
 
+    # Store one proposal and initialize captured model inputs.
     def __init__(self, proposal: object) -> None:
         self.model = "fixture/proposal-model"
         self._proposal = deepcopy(proposal)
         self.model_inputs: list[list[dict[str, object]]] = []
 
+    # Load and validate a single-proposal fixture from JSON.
     @classmethod
     def from_file(cls, path: Path) -> FrozenProposalAdapter:
         try:
@@ -144,6 +157,7 @@ class FrozenProposalAdapter:
             raise V2ContractError("adjudication fixture has an invalid shape")
         return cls(fixture["proposal"])
 
+    # Invoke the configured backend and return its response.
     def invoke(
         self,
         request: AdjudicationRequest,

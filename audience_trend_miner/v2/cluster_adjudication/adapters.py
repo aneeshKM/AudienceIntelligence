@@ -88,9 +88,11 @@ CRITIQUE_SCHEMA: dict[str, object] = {
 }
 
 
+# Translate adjudication requests into structured Groq model calls.
 class LangChainGroqAdjudicationAdapter:
     """Invoke one configured Groq chat model through the LangChain integration."""
 
+    # Configure or accept the Groq chat model used for adjudication.
     def __init__(
         self,
         *,
@@ -112,14 +114,18 @@ class LangChainGroqAdjudicationAdapter:
             )
         self._chat_model = chat_model
 
+    # Invoke Groq with the role-specific schema and return parsed model output.
     def invoke(self, request: AdjudicationRequest) -> object:
+        # Critic responses have a different contract from proposal/revision decisions.
         schema = CRITIQUE_SCHEMA if request.role == "critic" else DECISION_SCHEMA
+        # Groq model families support different structured-output mechanisms.
         if self.model in STRICT_SCHEMA_MODELS:
             method = "json_schema"
         elif self.model in COMPOUND_MODELS:
             method = "json_mode"
         else:
             method = "function_calling"
+        # Only explicit graph state is serialized; prompts prohibit outside knowledge.
         model_input = {
             "members": list(request.members),
             "proposal": request.proposal,
@@ -127,6 +133,7 @@ class LangChainGroqAdjudicationAdapter:
             "critique": request.critique,
         }
         system_prompt = request.prompt
+        # JSON mode does not enforce schema server-side, so include the exact schema.
         if method == "json_mode":
             system_prompt += (
                 " Do not use external tools or outside knowledge. Return only one "
@@ -145,6 +152,7 @@ class LangChainGroqAdjudicationAdapter:
                 )
             ),
         ]
+        # Configuration failures are deterministic contract errors, unlike delivery faults.
         try:
             options: dict[str, object] = {
                 "method": method,
@@ -165,6 +173,7 @@ class LangChainGroqAdjudicationAdapter:
                     f"Groq model '{self.model}' is unavailable to this project: {error}"
                 ) from error
             raise
+        # Preserve raw provider output when parsing fails so graph validation can fail closed.
         if not isinstance(response, dict):
             return response
         if response.get("parsing_error") is None:
@@ -173,6 +182,7 @@ class LangChainGroqAdjudicationAdapter:
         return getattr(raw, "content", raw)
 
 
+# Share production model configuration and rate limiting across clusters.
 @dataclass(frozen=True)
 class ProductionStageAdapterFactory:
     model: str = DEFAULT_CLUSTER_MODEL
@@ -187,6 +197,7 @@ class ProductionStageAdapterFactory:
         compare=False,
     )
 
+    # Create a Groq adapter that shares the stage-wide rate limiter.
     def adapter_for(
         self, cluster_index: int, preliminary_cluster: dict[str, object]
     ) -> LangChainGroqAdjudicationAdapter:

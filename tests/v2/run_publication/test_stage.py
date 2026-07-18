@@ -19,6 +19,7 @@ from tests.v2.trend_portfolio.test_stage import (
 )
 
 
+# Return semantic evidence fingerprint.
 def _semantic_evidence_fingerprint(evidence: dict[str, object]) -> str:
     payload = evidence["payload"]
     assert isinstance(payload, dict)
@@ -37,6 +38,7 @@ def _semantic_evidence_fingerprint(evidence: dict[str, object]) -> str:
     return canonical_json_fingerprint(records)
 
 
+# Publish completed upstream.
 def _publish_completed_upstream(
     root: Path,
     run_id: str = "publication-run",
@@ -121,6 +123,7 @@ def _publish_completed_upstream(
         raise AssertionError(completed.stderr)
 
 
+# Run publication against the shared completed upstream fixtures.
 def _run_publication(
     root: Path,
     *,
@@ -147,7 +150,9 @@ def _run_publication(
     )
 
 
+# Group tests for run publication stage behavior.
 class RunPublicationStageTest(unittest.TestCase):
+    # Verify: publishes exact schema valid artifact set with integrity.
     def test_publishes_exact_schema_valid_artifact_set_with_integrity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -212,6 +217,7 @@ class RunPublicationStageTest(unittest.TestCase):
                     },
                 )
 
+    # Verify: publishes a valid empty audience portfolio.
     def test_publishes_a_valid_empty_audience_portfolio(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -233,6 +239,7 @@ class RunPublicationStageTest(unittest.TestCase):
                 portfolio["completion"], {"status": "complete", "empty": True}
             )
 
+    # Verify: rejects absent incomplete incompatible and mismatched inputs.
     def test_rejects_absent_incomplete_incompatible_and_mismatched_inputs(self) -> None:
         scenarios = (
             ("absent", None, "artifact is absent"),
@@ -263,6 +270,7 @@ class RunPublicationStageTest(unittest.TestCase):
                 if before is not None:
                     self.assertEqual(artifact_path.read_bytes(), before)
 
+    # Verify: rejects schema valid but incompatible evidence without recalculation.
     def test_rejects_schema_valid_but_incompatible_evidence_without_recalculation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -290,6 +298,7 @@ class RunPublicationStageTest(unittest.TestCase):
                 upstream_before,
             )
 
+    # Verify: rejects prohibited secret and hidden reasoning fields.
     def test_rejects_prohibited_secret_and_hidden_reasoning_fields(self) -> None:
         for field in ("api_key", "chain_of_thought"):
             with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
@@ -317,6 +326,7 @@ class RunPublicationStageTest(unittest.TestCase):
                 self.assertIn("prohibited field", completed.stderr)
                 self.assertFalse((run_directory / "publication").exists())
 
+    # Verify: does not publish unstructured model attempt output.
     def test_does_not_publish_unstructured_model_attempt_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -346,6 +356,7 @@ class RunPublicationStageTest(unittest.TestCase):
             ).read_text(encoding="utf-8")
             self.assertNotIn(marker, audit_text)
 
+    # Verify: write and interruption failures never expose partial publication.
     def test_write_and_interruption_failures_never_expose_partial_publication(self) -> None:
         failures = (
             ("write-1", ("--fail-after-artifact", "1")),
@@ -365,6 +376,7 @@ class RunPublicationStageTest(unittest.TestCase):
                 self.assertFalse((run_directory / "publication").exists())
                 self.assertEqual(list(run_directory.glob(".publication.*")), [])
 
+    # Verify: collision is preserved and a valid publication resumes.
     def test_collision_is_preserved_and_a_valid_publication_resumes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -396,6 +408,7 @@ class RunPublicationStageTest(unittest.TestCase):
             events = [json.loads(line) for line in resumed.stdout.splitlines()]
             self.assertEqual([event["operation"] for event in events], ["resume"])
 
+    # Verify: resume rejects stale publication for changed compatible inputs.
     def test_resume_rejects_stale_publication_for_changed_compatible_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -420,6 +433,7 @@ class RunPublicationStageTest(unittest.TestCase):
                 {path.name: path.read_bytes() for path in publication.iterdir()}, before
             )
 
+    # Verify: resume rejects hash valid but internally changed publication.
     def test_resume_rejects_hash_valid_but_internally_changed_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -453,6 +467,7 @@ class RunPublicationStageTest(unittest.TestCase):
             self.assertNotEqual(resumed.returncode, 0)
             self.assertIn("collides with requested run", resumed.stderr)
 
+    # Verify: resume rejects schema valid but false manifest provenance.
     def test_resume_rejects_schema_valid_but_false_manifest_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -476,6 +491,7 @@ class RunPublicationStageTest(unittest.TestCase):
             self.assertNotEqual(resumed.returncode, 0)
             self.assertIn("collides with requested run", resumed.stderr)
 
+    # Verify: rejects duplicate or mismatched internal provenance.
     def test_rejects_duplicate_or_mismatched_internal_provenance(self) -> None:
         scenarios = (
             "adjudication-ids",
@@ -540,6 +556,7 @@ class RunPublicationStageTest(unittest.TestCase):
                 self.assertIn("inconsistent", completed.stderr)
                 self.assertFalse((run_directory / "publication").exists())
 
+    # Verify: rejects cross stage value contradictions.
     def test_rejects_cross_stage_value_contradictions(self) -> None:
         scenarios = (
             "formation-member",

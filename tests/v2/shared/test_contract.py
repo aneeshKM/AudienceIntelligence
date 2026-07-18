@@ -11,6 +11,7 @@ from pathlib import Path
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "v2_contract_stage.json"
 
 
+# Return invoke stage.
 def invoke_stage(output_dir: str, *arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -34,7 +35,9 @@ def invoke_stage(output_dir: str, *arguments: str) -> subprocess.CompletedProces
     )
 
 
+# Group tests for v2 stage cli contract behavior.
 class V2StageCliContractTest(unittest.TestCase):
+    # Verify: stage publishes a complete schema versioned artifact.
     def test_stage_publishes_a_complete_schema_versioned_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as output_dir:
             completed = invoke_stage(output_dir, "--progress-format", "json")
@@ -54,6 +57,7 @@ class V2StageCliContractTest(unittest.TestCase):
             self.assertEqual(events[1]["progress"], {"current": 2, "total": 2})
             self.assertTrue(all(event["schema_version"] == "1.0" for event in events))
 
+    # Verify: human progress uses the same bounded events.
     def test_human_progress_uses_the_same_bounded_events(self) -> None:
         with tempfile.TemporaryDirectory() as output_dir:
             completed = invoke_stage(output_dir)
@@ -67,6 +71,7 @@ class V2StageCliContractTest(unittest.TestCase):
                 ],
             )
 
+    # Verify: stable run id rejects incompatible configuration.
     def test_stable_run_id_rejects_incompatible_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as output_dir:
             first = invoke_stage(output_dir)
@@ -76,6 +81,7 @@ class V2StageCliContractTest(unittest.TestCase):
             self.assertNotEqual(conflicting.returncode, 0)
             self.assertIn("run configuration conflicts", conflicting.stderr)
 
+    # Verify: incomplete artifact is not consumable.
     def test_incomplete_artifact_is_not_consumable(self) -> None:
         with tempfile.TemporaryDirectory() as output_dir:
             run_directory = Path(output_dir) / "contract-run"
@@ -98,6 +104,7 @@ class V2StageCliContractTest(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("artifact is incomplete", completed.stderr)
 
+    # Verify: interrupted publication does not expose an artifact.
     def test_interrupted_publication_does_not_expose_an_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as output_dir:
             completed = invoke_stage(output_dir, "--interrupt-before-completion")

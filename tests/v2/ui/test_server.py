@@ -15,6 +15,7 @@ from audience_trend_miner import __main__ as cli
 from audience_trend_miner.v2.ui import create_app, serve
 
 
+# Return wait for terminal.
 def _wait_for_terminal(client: TestClient, run_id: str) -> dict[str, object]:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -25,6 +26,7 @@ def _wait_for_terminal(client: TestClient, run_id: str) -> dict[str, object]:
     raise AssertionError("run did not reach a terminal state")
 
 
+# Write completed publication.
 def _write_completed_publication(
     root: Path,
     run_id: str,
@@ -111,7 +113,9 @@ def _write_completed_publication(
     )
 
 
+# Group tests for run server behavior.
 class RunServerTest(unittest.TestCase):
+    # Verify: ui launch loads dotenv without overriding exported values.
     def test_ui_launch_loads_dotenv_without_overriding_exported_values(self) -> None:
         with (
             patch.object(cli, "load_dotenv") as load_dotenv,
@@ -123,6 +127,7 @@ class RunServerTest(unittest.TestCase):
         load_dotenv.assert_called_once_with(override=False)
         ui_main.assert_called_once_with([])
 
+    # Verify: primary page exposes one semantic installer interface.
     def test_primary_page_exposes_one_semantic_installer_interface(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             app = create_app(output_root=Path(temporary_directory) / "runs")
@@ -140,6 +145,7 @@ class RunServerTest(unittest.TestCase):
             self.assertIn('aria-live="polite"', response.text)
             self.assertIn('src="/assets/app.js"', response.text)
 
+    # Verify: primary page contains accessible progress and portfolio regions.
     def test_primary_page_contains_accessible_progress_and_portfolio_regions(
         self,
     ) -> None:
@@ -165,6 +171,7 @@ class RunServerTest(unittest.TestCase):
                 response.text,
             )
 
+    # Verify: completed run exposes only the validated portfolio contract.
     def test_completed_run_exposes_only_the_validated_portfolio_contract(self) -> None:
         audience = {
             "cluster_id": "cluster-clean-air",
@@ -208,6 +215,7 @@ class RunServerTest(unittest.TestCase):
             self.assertEqual(response.json()["audience_portfolio"], [audience])
             self.assertNotIn("stage_evidence", response.text)
 
+    # Verify: flushed cli events are forwarded live before process exit.
     def test_flushed_cli_events_are_forwarded_live_before_process_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -271,6 +279,7 @@ class RunServerTest(unittest.TestCase):
                 },
             )
 
+    # Verify: reconnect replays only the durable gap then continues live.
     def test_reconnect_replays_only_the_durable_gap_then_continues_live(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -322,6 +331,7 @@ class RunServerTest(unittest.TestCase):
                 ],
             )
 
+    # Verify: backend restart recovers event history by run and sequence.
     def test_backend_restart_recovers_event_history_by_run_and_sequence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -366,6 +376,7 @@ class RunServerTest(unittest.TestCase):
                 ],
             )
 
+    # Verify: malformed cli events are safely normalized without stopping reader.
     def test_malformed_cli_events_are_safely_normalized_without_stopping_reader(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -421,6 +432,7 @@ class RunServerTest(unittest.TestCase):
             )
             self.assertNotIn("private malformed details", json.dumps(events))
 
+    # Verify: out of order cli sequence is not hidden by durable ordering.
     def test_out_of_order_cli_sequence_is_not_hidden_by_durable_ordering(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -463,12 +475,14 @@ class RunServerTest(unittest.TestCase):
             )
             self.assertNotIn("skipped sequence one", json.dumps(events))
 
+    # Verify: server binds to loopback by default.
     def test_server_binds_to_loopback_by_default(self) -> None:
         with patch("uvicorn.run") as run:
             serve(output_root=Path("runs"))
 
         self.assertEqual(run.call_args.kwargs["host"], "127.0.0.1")
 
+    # Verify: start validates input and invokes cli as an argument array.
     def test_start_validates_input_and_invokes_cli_as_an_argument_array(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -528,6 +542,7 @@ class RunServerTest(unittest.TestCase):
             )
             self.assertNotIn(str(root), json.dumps(terminal))
 
+    # Verify: run paths cannot escape the configured output root.
     def test_run_paths_cannot_escape_the_configured_output_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -546,6 +561,7 @@ class RunServerTest(unittest.TestCase):
             self.assertEqual(portfolio.status_code, 404)
             self.assertNotIn("audience_portfolio", portfolio.text)
 
+    # Verify: structured events redact credentials before durable storage.
     def test_structured_events_redact_credentials_before_durable_storage(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -616,6 +632,7 @@ class RunServerTest(unittest.TestCase):
                 self.assertNotIn(sensitive_text, serialized_events)
                 self.assertNotIn(sensitive_text, durable_history)
 
+    # Verify: process ownership survives clients and rejects only duplicate runs.
     def test_process_ownership_survives_clients_and_rejects_only_duplicate_runs(
         self,
     ) -> None:
@@ -656,6 +673,7 @@ class RunServerTest(unittest.TestCase):
             self.assertEqual(owned_terminal["status"], "failed")
             self.assertEqual(other_terminal["status"], "failed")
 
+    # Verify: retry uses same run id and retains artifacts and event history.
     def test_retry_uses_same_run_id_and_retains_artifacts_and_event_history(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -725,6 +743,7 @@ class RunServerTest(unittest.TestCase):
                 "completed",
             )
 
+    # Verify: confirmed cancellation stops only owned process and keeps artifacts.
     def test_confirmed_cancellation_stops_only_owned_process_and_keeps_artifacts(
         self,
     ) -> None:
@@ -775,6 +794,7 @@ class RunServerTest(unittest.TestCase):
                 (output_root / "cancel-run" / "ran-after-cancel.txt").exists()
             )
 
+    # Verify: backend restart recovers terminal state and allows resume.
     def test_backend_restart_recovers_terminal_state_and_allows_resume(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -809,6 +829,7 @@ class RunServerTest(unittest.TestCase):
             self.assertEqual(resumed.status_code, 202)
             self.assertEqual(retried["status"], "failed")
 
+    # Verify: backend restart does not duplicate a surviving cli process.
     def test_backend_restart_does_not_duplicate_a_surviving_cli_process(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -858,6 +879,7 @@ class RunServerTest(unittest.TestCase):
             self.assertEqual(after_exit["status"], "failed")
             self.assertEqual(after_exit["failure"]["code"], "backend_interrupted")
 
+    # Verify: zero exit without completed publication is failure.
     def test_zero_exit_without_completed_publication_is_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -889,6 +911,7 @@ class RunServerTest(unittest.TestCase):
                 },
             )
 
+    # Verify: cli start failure is retained as sanitized terminal state.
     def test_cli_start_failure_is_retained_as_sanitized_terminal_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -920,6 +943,7 @@ class RunServerTest(unittest.TestCase):
             )
             self.assertNotIn(str(root), json.dumps(retained.json()))
 
+    # Verify: success requires zero exit and valid same run publication.
     def test_success_requires_zero_exit_and_valid_same_run_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -951,6 +975,7 @@ class RunServerTest(unittest.TestCase):
                 },
             )
 
+    # Verify: success rejects publication for a different as of date.
     def test_success_rejects_publication_for_a_different_as_of_date(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

@@ -14,7 +14,9 @@ DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
 
 
+# Describe the minimal SentenceTransformer encoder interface.
 class SentenceEncoder(Protocol):
+    # Encode text into embedding vectors.
     def encode(
         self,
         representations: Sequence[str],
@@ -24,15 +26,18 @@ class SentenceEncoder(Protocol):
     ) -> object: ...
 
 
+# Load sentence transformer.
 def _load_sentence_transformer(model: str) -> SentenceEncoder:
     from sentence_transformers import SentenceTransformer
 
     return SentenceTransformer(model)
 
 
+# Load and normalize production sentence embeddings.
 class SentenceTransformerEmbeddingAdapter:
     """Run configurable, batched local Sentence Transformer inference."""
 
+    # Initialize the SentenceTransformerEmbeddingAdapter.
     def __init__(
         self,
         model: str = DEFAULT_EMBEDDING_MODEL,
@@ -53,6 +58,7 @@ class SentenceTransformerEmbeddingAdapter:
         self._encoder_factory = encoder_factory
         self._encoder: SentenceEncoder | None = None
 
+    # Generate embedding vectors for the supplied representations.
     def embed(
         self, representations: Sequence[str]
     ) -> Sequence[Sequence[float]] | NDArray[np.float64]:
@@ -76,15 +82,18 @@ class SentenceTransformerEmbeddingAdapter:
             raise V2ContractError("embedding inference failed") from error
 
 
+# Serve deterministic embeddings keyed by exact representation text.
 class FrozenEmbeddingAdapter:
     """Resolve exact semantic representations from a deterministic fixture."""
 
+    # Initialize the FrozenEmbeddingAdapter.
     def __init__(
         self, model: str, embeddings: dict[str, tuple[float, ...]]
     ) -> None:
         self.model = model
         self._embeddings = embeddings
 
+    # Create an instance from file.
     @classmethod
     def from_file(cls, path: Path) -> FrozenEmbeddingAdapter:
         try:
@@ -109,6 +118,7 @@ class FrozenEmbeddingAdapter:
                 raise V2ContractError("embedding fixture has an invalid vector") from error
         return cls(fixture["model"], embeddings)
 
+    # Generate embedding vectors for the supplied representations.
     def embed(self, representations: Sequence[str]) -> tuple[tuple[float, ...], ...]:
         try:
             return tuple(self._embeddings[text] for text in representations)

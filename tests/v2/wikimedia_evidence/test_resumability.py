@@ -28,15 +28,19 @@ from tests.postgres import test_database_url
 DATABASE_URL = test_database_url()
 
 
+# Group tests for evidence job store behavior.
 class EvidenceJobStoreTest(unittest.TestCase):
+    # Prepare the shared test fixture.
     @classmethod
     def setUpClass(cls) -> None:
         cls.store = EvidenceJobStore(DATABASE_URL)
         cls.store.migrate()
 
+    # Prepare the test fixture.
     def setUp(self) -> None:
         self.store.clear_for_tests()
 
+    # Verify: scheduling is idempotent and claim is atomic.
     def test_scheduling_is_idempotent_and_claim_is_atomic(self) -> None:
         self.store.schedule_country_days("run-1", ("2026-07-01",))
         self.store.schedule_country_days("run-1", ("2026-07-01",))
@@ -54,12 +58,14 @@ class EvidenceJobStoreTest(unittest.TestCase):
             )
         )
 
+    # Verify: resume rejects changed effective configuration.
     def test_resume_rejects_changed_effective_configuration(self) -> None:
         self.store.ensure_run("run-1", {"country": "US"})
 
         with self.assertRaisesRegex(ValueError, "does not match"):
             self.store.ensure_run("run-1", {"country": "CA"})
 
+    # Verify: expired claim is recovered without accepting stale completion.
     def test_expired_claim_is_recovered_without_accepting_stale_completion(self) -> None:
         self.store.schedule_metadata_batches("run-1", ('["Alias_A"]',))
         stale = self.store.claim(
@@ -76,6 +82,7 @@ class EvidenceJobStoreTest(unittest.TestCase):
         self.assertIsInstance(result, CompletedEvidence)
         self.assertEqual(result.evidence, {"current": True})
 
+    # Verify: country day jobs retry independently report progress and resume.
     def test_country_day_jobs_retry_independently_report_progress_and_resume(self) -> None:
         adapter = CountryAdapter()
         progress = []
@@ -98,6 +105,7 @@ class EvidenceJobStoreTest(unittest.TestCase):
         self.assertEqual([event.sequence for event in progress], list(range(1, 15)))
         self.assertEqual(resumed_progress[-1].progress.current, 14)
 
+    # Verify: production stage resolves metadata publishes and resumes.
     def test_production_stage_resolves_metadata_publishes_and_resumes(self) -> None:
         adapter = ProductionCountryAdapter()
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -128,6 +136,7 @@ class EvidenceJobStoreTest(unittest.TestCase):
             self.assertEqual(payload["canonical_pages"][0]["lead"], "Lead")
             self.assertEqual(payload["canonical_pages"][0]["categories"], ["Visible"])
 
+    # Verify: stage merges partial alias metadata and skips a failed batch.
     def test_stage_merges_partial_alias_metadata_and_skips_a_failed_batch(self) -> None:
         adapter = PartialMetadataAdapter()
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -152,12 +161,15 @@ class EvidenceJobStoreTest(unittest.TestCase):
             self.assertEqual(adapter.failed_batch_attempts, 3)
 
 
+# Provide the country adapter test double.
 class CountryAdapter:
+    # Initialize the CountryAdapter.
     def __init__(self, unavailable: set[str] | None = None) -> None:
         self.calls = 0
         self.attempts: dict[str, int] = {}
         self.unavailable = unavailable if unavailable is not None else {"2026-07-03"}
 
+    # Return daily country top pages.
     def daily_country_top_pages(self, day: date) -> CountryTopPagesResponse:
         self.calls += 1
         day_text = day.isoformat()
@@ -174,10 +186,13 @@ class CountryAdapter:
         )
 
 
+# Provide the production country adapter test double.
 class ProductionCountryAdapter(CountryAdapter):
+    # Initialize the ProductionCountryAdapter.
     def __init__(self) -> None:
         super().__init__(unavailable=set())
 
+    # Return metadata batch.
     def metadata_batch(self, titles: tuple[str, ...]) -> MetadataBatchResponse:
         self.calls += 1
         return MetadataBatchResponse(
@@ -187,7 +202,9 @@ class ProductionCountryAdapter(CountryAdapter):
         )
 
 
+# Provide the partial metadata adapter test double.
 class PartialMetadataAdapter(CountryAdapter):
+    # Initialize the PartialMetadataAdapter.
     def __init__(self) -> None:
         super().__init__(unavailable=set())
         self.failed_batch_attempts = 0
@@ -197,6 +214,7 @@ class PartialMetadataAdapter(CountryAdapter):
             + ["Z000"]
         )
 
+    # Return daily country top pages.
     def daily_country_top_pages(self, day: date) -> CountryTopPagesResponse:
         self.calls += 1
         return CountryTopPagesResponse(
@@ -207,6 +225,7 @@ class PartialMetadataAdapter(CountryAdapter):
             {"day": day.isoformat()},
         )
 
+    # Return metadata batch.
     def metadata_batch(self, titles: tuple[str, ...]) -> MetadataBatchResponse:
         self.calls += 1
         if titles[0].startswith("B"):

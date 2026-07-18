@@ -19,6 +19,7 @@ ALLOWED_PAGE_FIELDS = (
     "lead",
     "selected_categories",
 )
+# Name the independent quality dimensions enforced by the critic.
 class CritiqueDimension(StrEnum):
     SEMANTIC_COHERENCE = "semantic_coherence"
     COMMERCIAL_MEANING = "commercial_meaning"
@@ -27,6 +28,7 @@ class CritiqueDimension(StrEnum):
     EVIDENCE_SUPPORT = "evidence_support"
 
 
+# Describe how a successful revision must resolve a critic challenge.
 class RequiredAction(StrEnum):
     REVISE = "revise"
     REJECT = "reject"
@@ -44,6 +46,7 @@ REVISER_PROMPT = """You are the Cluster Adjudication reviser. Address the suppli
 AdjudicationRole = Literal["proposer", "critic", "reviser"]
 
 
+# Carry the evidence and prior outputs visible to one model role.
 @dataclass(frozen=True)
 class AdjudicationRequest:
     role: AdjudicationRole
@@ -54,6 +57,7 @@ class AdjudicationRequest:
     critique: object = None
 
 
+# Represent one structured critic objection and its required resolution.
 @dataclass(frozen=True)
 class CritiqueChallenge:
     dimension: CritiqueDimension
@@ -62,24 +66,29 @@ class CritiqueChallenge:
     required_action: RequiredAction
 
 
+# Represent the critic approval decision for a proposal.
 @dataclass(frozen=True)
 class CritiqueDecision:
     approved: bool
     challenges: tuple[CritiqueChallenge, ...]
 
 
+# Define the model boundary used by the adjudication graph.
 class AdjudicationAdapter(Protocol):
     model: str
 
+    # Send one role-specific request to the configured model provider.
     def invoke(self, request: AdjudicationRequest) -> object: ...
 
 
+# Record one provider delivery attempt without storing model reasoning.
 @dataclass(frozen=True)
 class ProviderAttempt:
     attempt: int
     delivery_status: Literal["delivered", "error"]
     error: str | None
 
+    # Convert this delivery attempt into its artifact-safe dictionary form.
     def record(self) -> dict[str, object]:
         return {
             "attempt": self.attempt,
@@ -88,6 +97,7 @@ class ProviderAttempt:
         }
 
 
+# Record the bounded delivery and validation outcome for one model role.
 @dataclass(frozen=True)
 class ModelStepRecord:
     role: AdjudicationRole
@@ -95,6 +105,7 @@ class ModelStepRecord:
     validation_status: Literal["valid", "invalid", "not_run"]
     attempts: tuple[ProviderAttempt, ...]
 
+    # Convert this model step and its attempts into artifact data.
     def record(self) -> dict[str, object]:
         return {
             "role": self.role,
@@ -104,12 +115,14 @@ class ModelStepRecord:
         }
 
 
+# Hold one accepted audience group and its canonical page evidence.
 @dataclass(frozen=True)
 class AcceptedGroup:
     name: str
     rationale: str
     members: tuple[dict[str, object], ...]
 
+    # Return a defensive, serializable copy of this accepted group.
     def record(self) -> dict[str, object]:
         return {
             "name": self.name,
@@ -118,6 +131,7 @@ class AcceptedGroup:
         }
 
 
+# Hold the exclusive accepted/rejected result for one preliminary cluster.
 @dataclass(frozen=True)
 class ClusterAdjudicationResult:
     accepted_groups: tuple[AcceptedGroup, ...]
@@ -126,6 +140,7 @@ class ClusterAdjudicationResult:
     validation_errors: tuple[str, ...]
     steps: tuple[ModelStepRecord, ...] = ()
 
+    # Serialize the adjudication outcome without its runtime step history.
     def record(self) -> dict[str, object]:
         return {
             "accepted_groups": [group.record() for group in self.accepted_groups],
@@ -137,6 +152,7 @@ class ClusterAdjudicationResult:
         }
 
 
+# Define values passed between nodes in the adjudication state graph.
 class _GraphState(TypedDict, total=False):
     members: tuple[dict[str, object], ...]
     proposal: object
@@ -147,6 +163,7 @@ class _GraphState(TypedDict, total=False):
     result: ClusterAdjudicationResult
 
 
+# Run the proposer, critic, and optional reviser workflow for one cluster.
 def execute_cluster_adjudication(
     preliminary_cluster: object,
     adapter: AdjudicationAdapter,
@@ -155,15 +172,20 @@ def execute_cluster_adjudication(
     sleep: Callable[[float], None] | None = None,
 ) -> ClusterAdjudicationResult:
     """Adjudicate one Preliminary Cluster with bounded critique and revision."""
+    # Strip upstream records to the evidence fields explicitly permitted in prompts.
     members = _model_visible_members(preliminary_cluster)
     steps: list[ModelStepRecord] = []
     wait = sleep or time.sleep
 
+    # Deliver a model request with at most three provider attempts.
     def invoke(request: AdjudicationRequest) -> object:
         attempts: list[ProviderAttempt] = []
+        # Provider delivery is bounded independently for every graph role.
         for attempt_number in range(1, 4):
             try:
                 output = adapter.invoke(request)
+            # Contract errors describe deterministic configuration problems and must
+            # not be hidden behind transient-provider retries.
             except V2ContractError:
                 raise
             except Exception as error:
@@ -195,6 +217,7 @@ def execute_cluster_adjudication(
                 )
             )
             return output
+        # Exhaustion becomes auditable step evidence before control fails closed.
         exhausted = ModelStepRecord(
             role=request.role,
             status="exhausted",
@@ -206,6 +229,7 @@ def execute_cluster_adjudication(
             step_progress(exhausted)
         raise _DeliveryExhausted(request.role)
 
+    # Attach validation status to the latest model step and report progress.
     def finish_validation(role: AdjudicationRole, status: Literal["valid", "invalid"]) -> None:
         previous = steps[-1]
         if previous.role != role:
@@ -220,6 +244,7 @@ def execute_cluster_adjudication(
         if step_progress is not None:
             step_progress(completed)
 
+    # Ask the proposer to divide all supplied pages into groups or rejections.
     def propose(state: _GraphState) -> _GraphState:
         return {
             "proposal": invoke(
@@ -231,6 +256,7 @@ def execute_cluster_adjudication(
             )
         }
 
+    # Validate that the proposal assigns every page exactly once.
     def validate_proposal(state: _GraphState) -> _GraphState:
         result = _validated_result(state["members"], state["proposal"])
         finish_validation(
@@ -238,6 +264,7 @@ def execute_cluster_adjudication(
         )
         return {"proposal_result": result}
 
+    # Ask the critic to approve the proposal or return structured challenges.
     def critique(state: _GraphState) -> _GraphState:
         proposal_result = state["proposal_result"]
         model_output = invoke(
@@ -256,6 +283,7 @@ def execute_cluster_adjudication(
             "critique_decision": parsed,
         }
 
+    # Choose acceptance, revision, or rejection from the validation results.
     def after_critique(state: _GraphState) -> str:
         decision = state["critique_decision"]
         if decision is None:
@@ -267,9 +295,11 @@ def execute_cluster_adjudication(
             return "accept"
         return "revise"
 
+    # Promote the already-valid proposal to the final result.
     def accept(state: _GraphState) -> _GraphState:
         return {"result": state["proposal_result"]}
 
+    # Ask the reviser to address proposal errors and critic challenges once.
     def revise(state: _GraphState) -> _GraphState:
         proposal_result = state["proposal_result"]
         return {
@@ -285,6 +315,7 @@ def execute_cluster_adjudication(
             )
         }
 
+    # Validate the revision and enforce all mandatory prior rejections.
     def validate_revision(state: _GraphState) -> _GraphState:
         result = _validated_revision_result(
             state["members"],
@@ -297,9 +328,12 @@ def execute_cluster_adjudication(
         )
         return {"result": result}
 
+    # Fail closed when the critic response cannot be parsed safely.
     def reject_invalid_critique(state: _GraphState) -> _GraphState:
         return {"result": _invalid_result(state["members"], ("invalid_critique",))}
 
+    # The graph always performs independent critique; only valid approved proposals
+    # bypass the single bounded revision opportunity.
     builder = StateGraph(_GraphState)
     builder.add_node("propose", propose)
     builder.add_node("validate_proposal", validate_proposal)
@@ -324,6 +358,8 @@ def execute_cluster_adjudication(
     builder.add_edge("revise", "validate_revision")
     builder.add_edge("validate_revision", END)
     builder.add_edge("reject_invalid_critique", END)
+    # Delivery exhaustion rejects the complete component instead of publishing a
+    # partial or unevaluated model result.
     try:
         completed = builder.compile().invoke({"members": members})
         result = cast(ClusterAdjudicationResult, completed["result"])
@@ -338,6 +374,7 @@ def execute_cluster_adjudication(
     )
 
 
+# Calculate the provider-directed or fallback delay for a rate-limit error.
 def _rate_limit_retry_delay(error: Exception, attempt_number: int) -> float | None:
     """Return a safe wait for Groq 429 responses, preferring provider guidance."""
     status_code = getattr(error, "status_code", None)
@@ -349,6 +386,7 @@ def _rate_limit_retry_delay(error: Exception, attempt_number: int) -> float | No
     ):
         return None
 
+    # Prefer an explicit HTTP Retry-After header when the provider supplies one.
     response = getattr(error, "response", None)
     headers = getattr(response, "headers", None)
     if headers is not None:
@@ -359,6 +397,7 @@ def _rate_limit_retry_delay(error: Exception, attempt_number: int) -> float | No
         except (TypeError, ValueError):
             pass
 
+    # Some SDK errors expose the delay only in their human-readable message.
     duration = re.search(
         r"try again in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|s)\b",
         message,
@@ -370,18 +409,23 @@ def _rate_limit_retry_delay(error: Exception, attempt_number: int) -> float | No
             value /= 1000
         return value + 0.1
 
+    # Otherwise use capped exponential backoff with jitter to avoid synchronized retry.
     return min(2 ** (attempt_number - 1), 30) + random.uniform(0.0, 0.25)
 
 
+# Signal that one model role exhausted its bounded delivery attempts.
 class _DeliveryExhausted(RuntimeError):
+    # Record which adjudication role exhausted all delivery attempts.
     def __init__(self, role: AdjudicationRole) -> None:
         super().__init__(f"{role} delivery exhausted")
         self.role = role
 
 
+# Parse and strictly validate a critic response against the supplied pages.
 def _parse_critique(
     members: tuple[dict[str, object], ...], critique: object
 ) -> CritiqueDecision | None:
+    # Approval must be exactly equivalent to an empty challenge list.
     if (
         not isinstance(critique, dict)
         or set(critique) != {"approved", "challenges"}
@@ -390,6 +434,7 @@ def _parse_critique(
         or critique["approved"] != (not critique["challenges"])
     ):
         return None
+    # Challenges may reference only supplied pages and known enum values.
     supplied_ids = {member["page_id"] for member in members}
     parsed_challenges: list[CritiqueChallenge] = []
     for challenge in critique["challenges"]:
@@ -435,6 +480,7 @@ def _parse_critique(
     )
 
 
+# Validate a revision and ensure it does not undo required rejections.
 def _validated_revision_result(
     members: tuple[dict[str, object], ...],
     proposal: object,
@@ -459,6 +505,7 @@ def _validated_revision_result(
     return result
 
 
+# Extract unique, well-formed page rejections from the original proposal.
 def _explicit_rejections(
     members: tuple[dict[str, object], ...], proposal: object
 ) -> tuple[int, ...]:
@@ -483,6 +530,7 @@ def _explicit_rejections(
     return tuple(rejected_ids)
 
 
+# Collect pages the critic requires the workflow to reject.
 def _critic_required_rejections(critique: CritiqueDecision) -> tuple[int, ...]:
     required: list[int] = []
     for challenge in critique.challenges:
@@ -496,9 +544,11 @@ def _critic_required_rejections(critique: CritiqueDecision) -> tuple[int, ...]:
     return tuple(required)
 
 
+# Validate members and expose only the fields allowed in model prompts.
 def _model_visible_members(
     preliminary_cluster: object,
 ) -> tuple[dict[str, object], ...]:
+    # The model boundary rejects malformed upstream evidence instead of coercing it.
     if not isinstance(preliminary_cluster, dict):
         raise V2ContractError("Preliminary Cluster has an invalid shape")
     supplied_members = preliminary_cluster.get("members")
@@ -506,6 +556,7 @@ def _model_visible_members(
         raise V2ContractError("Preliminary Cluster members are invalid")
     members: list[dict[str, object]] = []
     page_ids: set[int] = set()
+    # Validate field bounds before making defensive copies for prompts.
     for supplied in supplied_members:
         if not isinstance(supplied, dict) or not all(
             field in supplied for field in ALLOWED_PAGE_FIELDS
@@ -531,6 +582,7 @@ def _model_visible_members(
             or len(selected_categories) != len(set(selected_categories))
         ):
             raise V2ContractError("Preliminary Cluster member is invalid")
+        # Duplicate IDs would make exclusive assignment impossible to interpret.
         if page_id in page_ids:
             raise V2ContractError("Preliminary Cluster contains duplicate page IDs")
         page_ids.add(page_id)
@@ -540,9 +592,11 @@ def _model_visible_members(
     return tuple(members)
 
 
+# Convert a complete, exclusive proposal into a validated domain result.
 def _validated_result(
     members: tuple[dict[str, object], ...], proposal: object
 ) -> ClusterAdjudicationResult:
+    # Validate the outer contract before inspecting individual assignments.
     if not isinstance(proposal, dict) or set(proposal) != {"groups", "rejected"}:
         return _invalid_result(members, ("invalid_proposal_shape",))
     groups = proposal.get("groups")
@@ -555,6 +609,8 @@ def _validated_result(
     supplied_ids = set(member_by_id)
     errors: list[str] = []
     occurrences: dict[int, int] = {}
+    # Count every accepted occurrence so duplicates and cross-group assignments are
+    # detected after each group has been structurally validated.
     parsed_groups: list[tuple[str, str, list[int]]] = []
     for group in groups:
         if not isinstance(group, dict) or set(group) != {
@@ -591,6 +647,7 @@ def _validated_result(
                 errors.append(f"unknown_page_id:{page_id}")
         parsed_groups.append((name, rationale, typed_page_ids))
 
+    # Rejections participate in the same exclusive-assignment count as groups.
     parsed_rejections: list[tuple[int, str]] = []
     for rejection in rejected:
         if not isinstance(rejection, dict) or set(rejection) != {"page_id", "reason"}:
@@ -609,6 +666,7 @@ def _validated_result(
             errors.append(f"unknown_page_id:{rejected_page_id}")
         parsed_rejections.append((rejected_page_id, reason))
 
+    # Every supplied page must terminate exactly once as accepted or rejected.
     for page_id in member_by_id:
         count = occurrences.get(page_id, 0)
         if count == 0:
@@ -618,6 +676,7 @@ def _validated_result(
     if errors:
         return _invalid_result(members, tuple(dict.fromkeys(errors)))
 
+    # Only after all validation passes do IDs become defensive domain records.
     accepted_groups = tuple(
         AcceptedGroup(
             name=name,
@@ -642,6 +701,7 @@ def _validated_result(
     )
 
 
+# Return each duplicated integer once, in first-duplicate order.
 def _duplicates(values: Sequence[int]) -> tuple[int, ...]:
     seen: set[int] = set()
     duplicates: list[int] = []
@@ -652,6 +712,7 @@ def _duplicates(values: Sequence[int]) -> tuple[int, ...]:
     return tuple(duplicates)
 
 
+# Fail closed by rejecting every member and preserving validation errors.
 def _invalid_result(
     members: tuple[dict[str, object], ...], errors: tuple[str, ...]
 ) -> ClusterAdjudicationResult:

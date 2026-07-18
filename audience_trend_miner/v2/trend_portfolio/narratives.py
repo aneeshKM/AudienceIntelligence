@@ -111,30 +111,38 @@ _INVENTED_TRAFFIC = re.compile(
 )
 
 
+# Carry code-owned facts into one isolated narrative generation call.
 @dataclass(frozen=True)
 class NarrativeRequest:
     prompt: str
     evidence: dict[str, object]
 
 
+# Define the model boundary for audience narrative generation.
 class NarrativeAdapter(Protocol):
     model: str
 
+    # Invoke the configured backend and return its response.
     def invoke(self, request: NarrativeRequest) -> object: ...
 
 
+# Define how the portfolio stage obtains per-audience narrative adapters.
 class NarrativeAdapterFactory(Protocol):
+    # Return the configured model name.
     @property
     def model(self) -> str: ...
 
+    # Return the integration name.
     @property
     def integration_name(self) -> str: ...
 
+    # Build the adapter for one stage work item.
     def adapter_for(
         self, cluster_index: int, cluster_id: str
     ) -> NarrativeAdapter: ...
 
 
+# Record one generated narrative attempt and its validation errors.
 @dataclass(frozen=True)
 class NarrativeAttempt:
     attempt: int
@@ -143,6 +151,7 @@ class NarrativeAttempt:
     output: object
     errors: tuple[str, ...]
 
+    # Convert this value into artifact data.
     def record(self) -> dict[str, object]:
         return {
             "attempt": self.attempt,
@@ -153,13 +162,16 @@ class NarrativeAttempt:
         }
 
 
+# Retry one isolated narrative until its generated fields are safe.
 def generate_validated_narrative(
     adapter: NarrativeAdapter,
     evidence: dict[str, object],
 ) -> tuple[dict[str, object], tuple[NarrativeAttempt, ...]]:
     """Retry one isolated narrative until its generated fields are safe."""
+    # Every attempt receives the same defensive copy of code-owned evidence.
     attempts: list[NarrativeAttempt] = []
     request = NarrativeRequest(prompt=NARRATIVE_PROMPT, evidence=deepcopy(evidence))
+    # Delivery and content validation are recorded separately for auditability.
     for attempt_number in range(1, MAX_NARRATIVE_ATTEMPTS + 1):
         try:
             output = adapter.invoke(request)
@@ -185,21 +197,26 @@ def generate_validated_narrative(
                 errors,
             )
         )
+        # The first valid result wins; invalid raw outputs remain attempt evidence only.
         if not errors:
             return cast(dict[str, object], output), tuple(attempts)
     raise NarrativeExhausted(tuple(attempts))
 
 
+# Expose all bounded attempts when safe narrative generation fails.
 class NarrativeExhausted(Exception):
+    # Initialize the NarrativeExhausted.
     def __init__(self, attempts: tuple[NarrativeAttempt, ...]) -> None:
         super().__init__("narrative attempts exhausted")
         self.attempts = attempts
 
 
+# Return deterministic validation errors for generated narrative fields.
 def narrative_validation_errors(
     output: object,
     evidence: dict[str, object],
 ) -> tuple[str, ...]:
+    # Structural schema errors take precedence because later checks assume exact fields.
     validator = jsonschema.Draft202012Validator(NARRATIVE_SCHEMA)
     schema_errors = sorted(
         (error.message.lower() for error in validator.iter_errors(output)),
@@ -207,6 +224,8 @@ def narrative_validation_errors(
     if schema_errors:
         return tuple(schema_errors)
     assert isinstance(output, dict)
+    # Remove the source name before claim scanning so names containing flagged words
+    # do not create false positives.
     text = " ".join(_strings_in(output))
     source_name = evidence.get("source_cluster_name")
     if isinstance(source_name, str):
@@ -228,6 +247,7 @@ def narrative_validation_errors(
     )
 
 
+# Validate persisted narrative attempts through the owning module contract.
 def validate_completed_narrative_evidence(
     record: dict[str, object],
     *,
@@ -236,6 +256,7 @@ def validate_completed_narrative_evidence(
     expected_narrative: dict[str, object],
 ) -> None:
     """Validate persisted narrative attempts through the owning module contract."""
+    # Prompt, input, model, numbering, and bounded attempt count are provenance facts.
     attempts = record.get("attempts")
     if (
         record.get("prompt") != NARRATIVE_PROMPT
@@ -246,6 +267,7 @@ def validate_completed_narrative_evidence(
         or len(attempts) > MAX_NARRATIVE_ATTEMPTS
     ):
         raise V2ContractError("Trend Portfolio narrative evidence is inconsistent")
+    # Re-run validation against every delivered output instead of trusting status flags.
     for attempt_number, attempt in enumerate(attempts, start=1):
         if not isinstance(attempt, dict) or attempt.get("attempt") != attempt_number:
             raise V2ContractError("Trend Portfolio narrative evidence is inconsistent")
@@ -269,6 +291,7 @@ def validate_completed_narrative_evidence(
             consistent = False
         if not consistent:
             raise V2ContractError("Trend Portfolio narrative evidence is inconsistent")
+    # Only the final attempt may be valid, and it must equal the published narrative.
     final_attempt = cast(dict[str, object], attempts[-1])
     if (
         final_attempt["validation_status"] != "valid"
@@ -281,10 +304,13 @@ def validate_completed_narrative_evidence(
         raise V2ContractError("Trend Portfolio narrative evidence is inconsistent")
 
 
+# Detect prohibited or invented claims in narrative copy.
 def _bounded_template_errors(
     output: dict[str, object],
     evidence: dict[str, object],
 ) -> tuple[str, ...]:
+    # Most generated prose is constrained to deterministic templates; the model mainly
+    # selects bounded categories and a buying-power rating.
     name = evidence["source_cluster_name"]
     direction = evidence["direction"]
     categories = cast(list[str], output["brand_categories"])
@@ -331,6 +357,7 @@ def _bounded_template_errors(
     )
 
 
+# Yield all strings nested inside a JSON-compatible value.
 def _strings_in(value: object) -> list[str]:
     if isinstance(value, str):
         return [value]
@@ -341,7 +368,9 @@ def _strings_in(value: object) -> list[str]:
     return []
 
 
+# Generate structured narrative fields through Groq.
 class LangChainGroqNarrativeAdapter:
+    # Initialize the LangChainGroqNarrativeAdapter.
     def __init__(self, *, model: str, chat_model: Any | None = None) -> None:
         self.model = model
         if chat_model is None:
@@ -355,6 +384,7 @@ class LangChainGroqNarrativeAdapter:
             )
         self._chat_model = chat_model
 
+    # Invoke the configured backend and return its response.
     def invoke(self, request: NarrativeRequest) -> object:
         from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -384,11 +414,13 @@ class LangChainGroqNarrativeAdapter:
         return getattr(raw, "content", raw)
 
 
+# Share production narrative model configuration across audiences.
 @dataclass(frozen=True)
 class ProductionNarrativeAdapterFactory:
     model: str = DEFAULT_NARRATIVE_MODEL
     integration_name: str = "langchain-groq"
 
+    # Build the adapter for one stage work item.
     def adapter_for(
         self, cluster_index: int, cluster_id: str
     ) -> LangChainGroqNarrativeAdapter:
@@ -396,11 +428,14 @@ class ProductionNarrativeAdapterFactory:
         return LangChainGroqNarrativeAdapter(model=self.model)
 
 
+# Consume deterministic narrative responses for one audience.
 class _ScriptedNarrativeAdapter:
+    # Initialize the _ScriptedNarrativeAdapter.
     def __init__(self, responses: list[object], *, model: str) -> None:
         self.model = model
         self._responses = deepcopy(responses)
 
+    # Invoke the configured backend and return its response.
     def invoke(self, request: NarrativeRequest) -> object:
         del request
         if not self._responses:
@@ -411,12 +446,14 @@ class _ScriptedNarrativeAdapter:
         return deepcopy(response)
 
 
+# Load and match fixture narratives by source cluster identity.
 @dataclass(frozen=True)
 class FrozenNarrativeAdapterFactory:
     model: str
     _clusters: tuple[dict[str, object], ...]
     integration_name: str = "fixture"
 
+    # Create an instance from file.
     @classmethod
     def from_file(cls, path: Path) -> FrozenNarrativeAdapterFactory:
         try:
@@ -434,6 +471,7 @@ class FrozenNarrativeAdapterFactory:
             raise V2ContractError("narrative fixture has an invalid shape")
         return cls(fixture["model"], tuple(deepcopy(fixture["clusters"])))
 
+    # Build the adapter for one stage work item.
     def adapter_for(
         self, cluster_index: int, cluster_id: str
     ) -> _ScriptedNarrativeAdapter:

@@ -28,13 +28,16 @@ FORMATION_FIXTURES = (
 )
 
 
+# Return unused loopback port.
 def _unused_loopback_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return listener.getsockname()[1]
 
 
+# Manage a loopback test server around the UI application.
 class _LiveServer:
+    # Initialize the _LiveServer.
     def __init__(self, app) -> None:
         self.port = _unused_loopback_port()
         self.server = uvicorn.Server(
@@ -47,6 +50,7 @@ class _LiveServer:
         )
         self.thread = Thread(target=self.server.run, daemon=True)
 
+    # Enter the managed context.
     def __enter__(self) -> str:
         self.thread.start()
         deadline = time.monotonic() + 5
@@ -56,13 +60,16 @@ class _LiveServer:
             raise AssertionError("test server did not start")
         return f"http://127.0.0.1:{self.port}"
 
+    # Exit the managed context.
     def __exit__(self, *_args) -> None:
         self.server.should_exit = True
         self.thread.join(timeout=5)
 
 
+# Group tests for browser workflow behavior.
 @unittest.skipIf(sync_playwright is None, "install the browser test extra")
 class BrowserWorkflowTest(unittest.TestCase):
+    # Verify: failure disconnect resume and empty publication render.
     def test_failure_disconnect_resume_and_empty_publication_render(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -219,7 +226,9 @@ class BrowserWorkflowTest(unittest.TestCase):
                 "2",
             )
 
+    # Verify: completed date shows trends without starting or resuming.
     def test_completed_date_shows_trends_without_starting_or_resuming(self) -> None:
+        # Handle audience.
         def audience(cluster_id: str, direction: str, change: float):
             return {
                 "cluster_id": cluster_id,
@@ -292,6 +301,7 @@ class BrowserWorkflowTest(unittest.TestCase):
                 )
                 browser.close()
 
+    # Verify: cancellation requires confirmation and keeps completed work.
     def test_cancellation_requires_confirmation_and_keeps_completed_work(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -334,6 +344,7 @@ class BrowserWorkflowTest(unittest.TestCase):
                 )
                 dialogs: list[str] = []
 
+                # Handle confirm.
                 def confirm(dialog) -> None:
                     dialogs.append(dialog.message)
                     dialog.accept()

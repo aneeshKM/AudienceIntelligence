@@ -40,6 +40,7 @@ DEFAULT_REVIEW_CAP = 10
 ReviewCapValue = int | Literal["all"]
 
 
+# Parse the configured Cluster Adjudication review budget.
 def parse_review_cap(value: object) -> ReviewCapValue:
     """Parse the configured Cluster Adjudication review budget."""
     if value == "all":
@@ -59,6 +60,7 @@ def parse_review_cap(value: object) -> ReviewCapValue:
     return parsed
 
 
+# Validate Wikimedia Evidence and form deterministic Selected Categories.
 def execute_category_selection(
     *,
     run_id: str,
@@ -68,6 +70,7 @@ def execute_category_selection(
     event_progress: BoundedProgress | None = None,
 ) -> CategorySelection:
     """Validate Wikimedia Evidence and form deterministic Selected Categories."""
+    # Downstream semantic work only begins from a completed, compatible evidence file.
     evidence_path = wikimedia_evidence_path or (
         output_root / run_id / "wikimedia-evidence.json"
     )
@@ -76,6 +79,7 @@ def execute_category_selection(
     assert isinstance(payload, dict)
     canonical_pages = payload["canonical_pages"]
     assert isinstance(canonical_pages, list)
+    # Category selection is code-owned and deterministic; no model is involved here.
     selection = select_categories(canonical_pages)
     page_count = len(selection.pages)
     progress_sink(
@@ -97,6 +101,7 @@ def execute_category_selection(
     return selection
 
 
+# Form, cap, and atomically publish Preliminary Cluster evidence.
 def execute_preliminary_clustering(
     *,
     run_id: str,
@@ -108,6 +113,7 @@ def execute_preliminary_clustering(
     wikimedia_evidence_path: Path | None = None,
 ) -> Path:
     """Form, cap, and atomically publish Preliminary Cluster evidence."""
+    # Effective configuration includes upstream identity, making resume drift visible.
     review_cap = parse_review_cap(review_cap)
     evidence_path = wikimedia_evidence_path or (
         output_root / run_id / "wikimedia-evidence.json"
@@ -124,6 +130,7 @@ def execute_preliminary_clustering(
         ),
     )
     artifact_path = output_root / run_id / f"{STAGE}.json"
+    # A completed artifact is reusable only when its schema and full configuration match.
     if artifact_path.exists():
         completed = consume_artifact(artifact_path, run_id=run_id, stage=STAGE)
         try:
@@ -153,6 +160,7 @@ def execute_preliminary_clustering(
         )
         return artifact_path
 
+    # With no reusable output, run each bounded formation phase in dependency order.
     selection = execute_category_selection(
         run_id=run_id,
         output_root=output_root,
@@ -162,6 +170,7 @@ def execute_preliminary_clustering(
     )
     sequence = 1
 
+    # Emit formation progress.
     def emit_formation_progress(operation: str, message: str) -> None:
         nonlocal sequence
         sequence += 1
@@ -185,6 +194,7 @@ def execute_preliminary_clustering(
         subdivision_policy=subdivision_policy,
         progress=emit_formation_progress,
     )
+    # The review cap limits model work after ranking, never the clustering universe.
     selected_clusters = (
         result.preliminary_clusters
         if review_cap == "all"
@@ -197,6 +207,7 @@ def execute_preliminary_clustering(
         f"selected {selected_count} of {eligible_count} eligible Preliminary Clusters "
         f"with review cap {review_cap!r}",
     )
+    # Persist only interpretable evidence and subdivision provenance, never vectors.
     payload = {
         "configuration": requested_configuration,
         "counts": {
@@ -243,6 +254,7 @@ def execute_preliminary_clustering(
         "payload": payload,
     }
     try:
+        # Validate the exact payload before the atomic write makes completion observable.
         validate_schema(SCHEMA_PATH, payload)
     except jsonschema.ValidationError as error:
         raise V2ContractError(
@@ -269,6 +281,7 @@ def execute_preliminary_clustering(
     return artifact_path
 
 
+# Build the effective formation-stage configuration.
 def _formation_configuration(
     *,
     embedding_model: str,
@@ -289,6 +302,7 @@ def _formation_configuration(
     }
 
 
+# Fingerprint semantic evidence used across stages.
 def _semantic_evidence_fingerprint(artifact: dict[str, object]) -> str:
     payload = artifact["payload"]
     assert isinstance(payload, dict)

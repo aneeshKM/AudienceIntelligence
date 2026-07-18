@@ -62,6 +62,7 @@ TECHNICAL_NAMESPACES = frozenset(
 )
 
 
+# Return the audited exclusion reason for a page title.
 def deterministic_exclusion_reason(title: str) -> str | None:
     normalized = title.replace("_", " ").strip()
     if normalized.casefold() == "main page":
@@ -72,10 +73,13 @@ def deterministic_exclusion_reason(title: str) -> str | None:
     return None
 
 
+# Define country-day acquisition required by the evidence stage.
 class CountryTopPagesAdapter(Protocol):
+    # Fetch top-page evidence for one country-day.
     def daily_country_top_pages(self, day: date) -> CountryTopPagesResponse: ...
 
 
+# Load completed, schema-compatible Wikimedia Evidence for a downstream stage.
 def consume_wikimedia_evidence(path: Path, *, run_id: str) -> dict[str, object]:
     """Load completed, schema-compatible Wikimedia Evidence for a downstream stage."""
     artifact = consume_artifact(path, run_id=run_id, stage=STAGE)
@@ -88,6 +92,7 @@ def consume_wikimedia_evidence(path: Path, *, run_id: str) -> dict[str, object]:
     return artifact
 
 
+# Acquire independently resumable US country-day Analytics evidence.
 def acquire_country_days(
     run_id: str,
     days: tuple[date, ...],
@@ -98,6 +103,7 @@ def acquire_country_days(
     workers: int = 4,
 ) -> tuple[TerminalEvidence, ...]:
     """Acquire independently resumable US country-day Analytics evidence."""
+    # Exactly two consecutive seven-day windows are required for comparable traffic.
     validate_identifier(run_id, "run_id")
     if len(days) != 14 or any(
         later != earlier + timedelta(days=1)
@@ -116,11 +122,13 @@ def acquire_country_days(
         )
     except ValueError as error:
         raise V2ContractError(str(error)) from error
+    # Scheduling is idempotent, so retries resume terminal days and claim only gaps.
     store.schedule_country_days(run_id, subjects)
     existing = store.terminal_results(run_id, (COUNTRY_DAY_OPERATION,))
     sequence = 0
     sequence_lock = Lock()
 
+    # Emit the next bounded progress event.
     def emit(subject: str, message: str) -> None:
         nonlocal sequence
         with sequence_lock:
@@ -142,6 +150,7 @@ def acquire_country_days(
     for result in existing:
         emit(result.subject, "resumed")
 
+    # Fetch one country-day response for a worker job.
     def fetch(job: EvidenceJob) -> object:
         response = adapter.daily_country_top_pages(date.fromisoformat(job.subject))
         return {
@@ -162,6 +171,7 @@ def acquire_country_days(
             ),
         }
 
+    # Workers share the durable queue; permanent HTTP failures terminate only one day.
     EvidenceJobExecution(store, honor_retry_after=True).drain(
         run_id,
         (COUNTRY_DAY_OPERATION,),
@@ -171,6 +181,7 @@ def acquire_country_days(
         on_terminal=lambda job: emit(job.subject, "processed"),
     )
     results = store.results_at_barrier(run_id, (COUNTRY_DAY_OPERATION,))
+    # Each effective window must retain enough successful days for bounded estimates.
     for window, window_results in (
         ("previous", results[:7]),
         ("current", results[7:]),
@@ -186,6 +197,7 @@ def acquire_country_days(
     return results
 
 
+# Acquire, resolve, validate, and atomically publish production Run Evidence.
 def execute_wikimedia_evidence(
     *,
     run_id: str,
@@ -197,6 +209,7 @@ def execute_wikimedia_evidence(
     workers: int = 4,
 ) -> Path:
     """Acquire, resolve, validate, and atomically publish production Run Evidence."""
+    # Record effective run configuration before acquisition so drift cannot resume.
     run_directory = output_root / run_id
     run_directory.mkdir(parents=True, exist_ok=True)
     record_run_configuration(
@@ -212,6 +225,7 @@ def execute_wikimedia_evidence(
             as_of_date=as_of_date,
             progress_sink=progress_sink,
         )
+    # Exclude the as-of day and yesterday because Wikimedia data may still be unstable.
     previous_start = as_of_date - timedelta(days=15)
     previous_end = as_of_date - timedelta(days=9)
     current_start = as_of_date - timedelta(days=8)
@@ -220,6 +234,7 @@ def execute_wikimedia_evidence(
     country_results = acquire_country_days(
         run_id, days, adapter, store, progress_sink, workers=workers
     )
+    # Resolve metadata once per unique observed title, in Action API batches of fifty.
     candidate_titles = sorted(
         {
             str(record["article"])
@@ -234,6 +249,7 @@ def execute_wikimedia_evidence(
     )
     store.schedule_metadata_batches(run_id, batches)
 
+    # Fetch metadata.
     def fetch_metadata(job: EvidenceJob) -> object:
         response = adapter.metadata_batch(tuple(json.loads(job.subject)))
         return {
@@ -272,6 +288,7 @@ def execute_wikimedia_evidence(
                 progress=BoundedProgress(offset, total_progress),
             )
         )
+    # Merge partial metadata responses by page ID and retain aliases for traffic joins.
     canonical_metadata_by_alias: dict[str, dict[str, object]] = {}
     canonical_metadata_by_page_id: dict[int, dict[str, object]] = {}
     unavailable_titles: set[str] = set()
@@ -315,6 +332,7 @@ def execute_wikimedia_evidence(
     for title in unavailable_titles:
         canonical_metadata_by_alias[title] = {"unavailable": True}
 
+    # Keep observations by original alias until canonical metadata resolution completes.
     observations_by_alias: dict[str, list[dict[str, object]]] = {}
     nominal_days: list[dict[str, object]] = []
     daily_cutoffs: list[dict[str, object]] = []
@@ -336,6 +354,7 @@ def execute_wikimedia_evidence(
             observations_by_alias.setdefault(str(record["article"]), []).append(
                 {"date": day_text, "views_ceil": int(record["views_ceil"])}
             )
+    # Collapse aliases and audited exclusions into the canonical page universe.
     canonical_pages, metadata_exclusions = _canonicalize(
         set(candidate_titles), observations_by_alias, canonical_metadata_by_alias
     )
@@ -355,6 +374,7 @@ def execute_wikimedia_evidence(
         "completion": {"status": "complete", "minimum_successful_days_per_window": MINIMUM_SUCCESSFUL_DAYS},
     }
     artifact = {"schema_version": ARTIFACT_SCHEMA_VERSION, "run_id": run_id, "stage": STAGE, "status": "complete", "payload": payload}
+    # Reserve the path in PostgreSQL before writing, then mark it complete afterward.
     validate_schema(SCHEMA_PATH, payload)
     validate_artifact(artifact, run_id=run_id, stage=STAGE)
     store.reserve_publication_path(run_id, str(artifact_path))
@@ -375,6 +395,7 @@ def execute_wikimedia_evidence(
     return artifact_path
 
 
+# Execute wikimedia evidence fixture.
 def execute_wikimedia_evidence_fixture(
     *,
     run_id: str,
@@ -383,6 +404,7 @@ def execute_wikimedia_evidence_fixture(
     fixture_path: Path,
     progress_sink: ProgressSink,
 ) -> Path:
+    # Fixtures exercise the same evidence contract without external HTTP or PostgreSQL.
     validate_identifier(run_id, "run_id")
     fixture = _load_fixture(fixture_path)
     previous_start = as_of_date - timedelta(days=15)
@@ -422,6 +444,7 @@ def execute_wikimedia_evidence_fixture(
     coverage = {"previous": 0, "current": 0}
     non_en_wikipedia_records = 0
 
+    # Replay daily responses through the same window, cutoff, and coverage accounting.
     for sequence, day in enumerate(nominal_dates, start=1):
         day_text = day.isoformat()
         response = daily_responses.get(day_text)
@@ -473,6 +496,7 @@ def execute_wikimedia_evidence_fixture(
             )
         )
 
+    # Fixture mode cannot bypass the production minimum-coverage rule.
     for window, successful_days in coverage.items():
         if successful_days < MINIMUM_SUCCESSFUL_DAYS:
             raise V2ContractError(
@@ -480,6 +504,7 @@ def execute_wikimedia_evidence_fixture(
                 f"at least {MINIMUM_SUCCESSFUL_DAYS} are required"
             )
 
+    # Share canonicalization so fixture and production artifacts are interchangeable.
     canonical_pages, metadata_exclusions = _canonicalize(
         candidate_titles, observations_by_alias, fixture["canonical_pages"]
     )
@@ -542,6 +567,7 @@ def execute_wikimedia_evidence_fixture(
     return artifact_path
 
 
+# Load a compatible completed Wikimedia Evidence artifact.
 def _resume_completed_evidence(
     artifact_path: Path,
     *,
@@ -571,11 +597,13 @@ def _resume_completed_evidence(
     return artifact_path
 
 
+# Merge page aliases into canonical evidence records.
 def _canonicalize(
     candidate_titles: set[str],
     observations_by_alias: Mapping[str, list[dict[str, object]]],
     canonical_facts: object,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
+    # Group aliases by stable page ID while counting deterministic exclusions.
     if not isinstance(canonical_facts, dict):
         raise V2ContractError("fixture canonical_pages are invalid")
     grouped: dict[int, dict[str, Any]] = {}
@@ -601,6 +629,7 @@ def _canonicalize(
         page_id = int(facts["page_id"])
         lead = str(facts.get("lead", ""))[:600]
         categories = sorted({str(item) for item in facts.get("categories", [])})
+        # Multiple observed titles may redirect to the same canonical page.
         page = grouped.setdefault(
             page_id,
             {
@@ -618,6 +647,7 @@ def _canonicalize(
             raise V2ContractError(f"canonical metadata conflict for page {page_id}")
         page["aliases"].append(alias)
         page["observations"].extend(observations_by_alias.get(alias, []))
+    # Aliases can appear on the same day, so aggregate their traffic by date.
     for page in grouped.values():
         observations_by_date: dict[str, int] = {}
         for observation in page["observations"]:
@@ -643,6 +673,7 @@ def _canonicalize(
     )
 
 
+# Load and validate a Wikimedia Evidence fixture document.
 def _load_fixture(path: Path) -> dict[str, object]:
     try:
         fixture = json.loads(path.read_text(encoding="utf-8"))

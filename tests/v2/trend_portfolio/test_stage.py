@@ -13,6 +13,7 @@ from audience_trend_miner.v2.trend_portfolio.narratives import (
 )
 
 
+# Publish qualifying upstream.
 def _publish_qualifying_upstream(root: Path, run_id: str) -> tuple[Path, Path]:
     evidence_path, adjudication_path = _artifacts(root, run_id=run_id)
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
@@ -40,6 +41,7 @@ def _publish_qualifying_upstream(root: Path, run_id: str) -> tuple[Path, Path]:
     return evidence_path, adjudication_path
 
 
+# Publish nonqualifying upstream.
 def _publish_nonqualifying_upstream(root: Path, run_id: str) -> tuple[Path, Path]:
     evidence_path, adjudication_path = _artifacts(root, run_id=run_id)
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
@@ -57,6 +59,7 @@ def _publish_nonqualifying_upstream(root: Path, run_id: str) -> tuple[Path, Path
     return evidence_path, adjudication_path
 
 
+# Run the Trend Portfolio stage with fixture-backed narratives.
 def _run_stage(
     output_root: Path,
     fixture_path: Path,
@@ -86,6 +89,7 @@ def _run_stage(
     )
 
 
+# Return bounded narrative.
 def _bounded_narrative(
     name: str,
     direction: str,
@@ -111,6 +115,7 @@ def _bounded_narrative(
     }
 
 
+# Write valid fixture.
 def _write_valid_fixture(path: Path) -> None:
     path.write_text(
         json.dumps(
@@ -145,7 +150,9 @@ def _write_valid_fixture(path: Path) -> None:
     )
 
 
+# Group tests for trend portfolio stage behavior.
 class TrendPortfolioStageTest(unittest.TestCase):
+    # Verify: source name identity words are not treated as invented claims.
     def test_source_name_identity_words_are_not_treated_as_invented_claims(self) -> None:
         evidence = {
             "source_cluster_name": "Godzilla Kaiju Fans",
@@ -162,6 +169,7 @@ class TrendPortfolioStageTest(unittest.TestCase):
 
         self.assertEqual(narrative_validation_errors(narrative, evidence), ())
 
+    # Verify: rejects equivalent prohibited claims and invented traffic.
     def test_rejects_equivalent_prohibited_claims_and_invented_traffic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -202,6 +210,7 @@ class TrendPortfolioStageTest(unittest.TestCase):
             second_errors = payload["narrative_evidence"][1]["attempts"][0]["errors"]
             self.assertTrue(any("traffic" in error for error in second_errors))
 
+    # Verify: resume rejects tampered checkpoint facts and evidence.
     def test_resume_rejects_tampered_checkpoint_facts_and_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -235,6 +244,7 @@ class TrendPortfolioStageTest(unittest.TestCase):
             self.assertNotEqual(resumed.returncode, 0)
             self.assertIn("checkpoint deterministic facts", resumed.stderr)
 
+    # Verify: no qualifying cluster publishes empty portfolio without calls.
     def test_no_qualifying_cluster_publishes_empty_portfolio_without_calls(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -263,6 +273,7 @@ class TrendPortfolioStageTest(unittest.TestCase):
             self.assertEqual(payload["audience_portfolio"], [])
             self.assertEqual(payload["narrative_evidence"], [])
 
+    # Verify: exhausted validation is atomic auditable and resumable.
     def test_exhausted_validation_is_atomic_auditable_and_resumable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -316,6 +327,7 @@ class TrendPortfolioStageTest(unittest.TestCase):
                 ["attachment", "qualification", "ranking", "narrative", "publish"],
             )
 
+    # Verify: resume rejects schema valid changes to deterministic facts.
     def test_resume_rejects_schema_valid_changes_to_deterministic_facts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -334,6 +346,7 @@ class TrendPortfolioStageTest(unittest.TestCase):
             self.assertNotEqual(resumed.returncode, 0)
             self.assertIn("deterministic facts", resumed.stderr)
 
+    # Verify: retries invalid copy and publishes code owned facts with audit.
     def test_retries_invalid_copy_and_publishes_code_owned_facts_with_audit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

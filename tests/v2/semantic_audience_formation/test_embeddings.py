@@ -12,10 +12,13 @@ from audience_trend_miner.v2.semantic_audience_formation.embeddings import (
 from audience_trend_miner.v2.shared import V2ContractError
 
 
+# Provide the recording encoder test double.
 class RecordingEncoder:
+    # Initialize the RecordingEncoder.
     def __init__(self) -> None:
         self.calls: list[tuple[tuple[str, ...], int, bool]] = []
 
+    # Record encoder configuration and return deterministic vectors.
     def encode(
         self,
         representations: tuple[str, ...],
@@ -27,7 +30,9 @@ class RecordingEncoder:
         return np.ones((len(representations), 3), dtype=float)
 
 
+# Group tests for production embedding adapter behavior.
 class ProductionEmbeddingAdapterTest(unittest.TestCase):
+    # Verify: uses documented default model and configured batches.
     def test_uses_documented_default_model_and_configured_batches(self) -> None:
         encoder = RecordingEncoder()
         loaded_models: list[str] = []
@@ -51,6 +56,7 @@ class ProductionEmbeddingAdapterTest(unittest.TestCase):
             ],
         )
 
+    # Verify: uses valid model and batch size overrides.
     def test_uses_valid_model_and_batch_size_overrides(self) -> None:
         encoder = RecordingEncoder()
 
@@ -64,6 +70,7 @@ class ProductionEmbeddingAdapterTest(unittest.TestCase):
         self.assertEqual(adapter.model, "local/experiment-model")
         self.assertEqual(encoder.calls[0][1], 7)
 
+    # Verify: rejects invalid model and batch configuration.
     def test_rejects_invalid_model_and_batch_configuration(self) -> None:
         for model, batch_size, expected_error in (
             ("", 32, "embedding model must be non-empty"),

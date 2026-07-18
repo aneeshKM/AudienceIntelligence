@@ -17,6 +17,7 @@ FORMATION_FIXTURES = (
 )
 
 
+# Return global cli arguments.
 def global_cli_arguments(
     output_root: Path,
     *,
@@ -49,6 +50,7 @@ def global_cli_arguments(
     ]
 
 
+# Run global cli.
 def run_global_cli(
     output_root: Path,
     *,
@@ -63,6 +65,7 @@ def run_global_cli(
     )
 
 
+# Return rewritten fixture.
 def _rewritten_fixture(
     root: Path,
     source: Path,
@@ -76,7 +79,9 @@ def _rewritten_fixture(
     return path
 
 
+# Group tests for global orchestration behavior.
 class GlobalOrchestrationTest(unittest.TestCase):
+    # Verify: global cli orders all modules and succeeds only after publication.
     def test_global_cli_orders_all_modules_and_succeeds_only_after_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_root = Path(temporary_directory)
@@ -113,6 +118,7 @@ class GlobalOrchestrationTest(unittest.TestCase):
                 {"portfolio.json", "audit.json", "manifest.json"},
             )
 
+    # Verify: json events are flushed while the process is running.
     def test_json_events_are_flushed_while_the_process_is_running(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             process = subprocess.Popen(
@@ -134,6 +140,7 @@ class GlobalOrchestrationTest(unittest.TestCase):
             self.assertEqual(process.returncode, 0, stderr)
             self.assertTrue(remaining_stdout)
 
+    # Verify: resume from every module boundary reuses completed work.
     def test_resume_from_every_module_boundary_reuses_completed_work(self) -> None:
         stage_names = (
             "wikimedia-evidence",
@@ -177,6 +184,7 @@ class GlobalOrchestrationTest(unittest.TestCase):
                             f"{completed_stage} repeated work: {operations}",
                         )
 
+    # Verify: resume rejects configuration drift at module boundaries.
     def test_resume_rejects_configuration_drift_at_module_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_root = Path(temporary_directory)
@@ -222,6 +230,7 @@ class GlobalOrchestrationTest(unittest.TestCase):
                     self.assertIn("conflict", resumed.stderr)
                     self.assertNotIn("Traceback", resumed.stderr)
 
+    # Verify: module failure stops downstream work and returns failure status.
     def test_module_failure_stops_downstream_work_and_returns_failure_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_root = Path(temporary_directory)
@@ -261,6 +270,7 @@ class GlobalOrchestrationTest(unittest.TestCase):
             self.assertEqual(failure_event["level"], "error")
             self.assertFalse((output_root / "global-run" / "publication").exists())
 
+    # Verify: invalid fixture returns a clean failure status.
     def test_invalid_fixture_returns_a_clean_failure_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_root = Path(temporary_directory)
@@ -276,6 +286,7 @@ class GlobalOrchestrationTest(unittest.TestCase):
             self.assertIn("error: narrative fixture", failed.stderr)
             self.assertNotIn("Traceback", failed.stderr)
 
+    # Verify: global resume rejects an incompatible completed publication.
     def test_global_resume_rejects_an_incompatible_completed_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_root = Path(temporary_directory)

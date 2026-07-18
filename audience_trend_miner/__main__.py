@@ -11,6 +11,7 @@ from typing import Callable
 from dotenv import load_dotenv
 
 
+# Run the command-line entry point.
 def main() -> int:
     load_dotenv(override=False)
     if len(sys.argv) > 1 and sys.argv[1] == "v2-ui":
@@ -32,6 +33,7 @@ def main() -> int:
     return _v2_run_main(sys.argv[1:])
 
 
+# Run the local V2 UI command.
 def _v2_ui_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2.ui import serve
 
@@ -43,6 +45,7 @@ def _v2_ui_main(arguments: list[str]) -> int:
     return 0
 
 
+# Parse and dispatch a V2 pipeline command.
 def _v2_run_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2.cluster_adjudication import (
         DEFAULT_CLUSTER_MODEL,
@@ -86,6 +89,7 @@ def _v2_run_main(arguments: list[str]) -> int:
         execute_wikimedia_evidence_fixture,
     )
 
+    # Parse an argparse review-cap value.
     def review_cap_argument(value: str):
         try:
             return parse_review_cap(value)
@@ -179,6 +183,7 @@ def _v2_run_main(arguments: list[str]) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
+    # Fingerprint an optional fixture file.
     def fixture_fingerprint(path: Path | None) -> str | None:
         if path is None:
             return None
@@ -228,6 +233,7 @@ def _v2_run_main(arguments: list[str]) -> int:
     }
 
     if parsed.wikimedia_fixture is not None:
+        # Run the production Wikimedia acquisition path.
         def run_wikimedia(sink):
             return execute_wikimedia_evidence_fixture(
                 run_id=parsed.run_id,
@@ -245,6 +251,7 @@ def _v2_run_main(arguments: list[str]) -> int:
         store = EvidenceJobStore(parsed.database_url)
         store.migrate()
 
+        # Run deterministic Wikimedia acquisition from the supplied fixture.
         def run_wikimedia(sink):
             return execute_wikimedia_evidence(
                 run_id=parsed.run_id,
@@ -295,12 +302,14 @@ def _v2_run_main(arguments: list[str]) -> int:
     )
 
 
+# Run the Wikimedia Evidence command.
 def _wikimedia_evidence_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2.wikimedia_evidence import (
         execute_wikimedia_evidence,
         execute_wikimedia_evidence_fixture,
     )
 
+    # This command selects either durable production acquisition or deterministic fixtures.
     parser = argparse.ArgumentParser(
         prog="audience-trend-miner v2-wikimedia-evidence"
     )
@@ -313,6 +322,7 @@ def _wikimedia_evidence_main(arguments: list[str]) -> int:
     parser.add_argument("--progress-format", choices=("human", "json"), default="human")
     parsed = parser.parse_args(arguments)
     sink = _v2_progress_sink(parsed.progress_format)
+    # Production requires PostgreSQL for leases; fixture mode is fully local.
     if parsed.fixture is None:
         if not parsed.database_url:
             parser.error("--database-url or DATABASE_URL is required without --fixture")
@@ -345,6 +355,7 @@ def _wikimedia_evidence_main(arguments: list[str]) -> int:
     )
 
 
+# Run the Semantic Audience Formation command.
 def _semantic_audience_formation_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2.semantic_audience_formation import (
         execute_category_selection,
@@ -364,12 +375,14 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
         DEFAULT_SIMILARITY_THRESHOLD,
     )
 
+    # Parse an argparse review-cap value.
     def review_cap_argument(value: str):
         try:
             return parse_review_cap(value)
         except ValueError as error:
             raise argparse.ArgumentTypeError(str(error)) from error
 
+    # Formation may stop after categories or continue through production/fixture embeddings.
     parser = argparse.ArgumentParser(
         prog="audience-trend-miner v2-semantic-audience-formation"
     )
@@ -421,6 +434,7 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
     parser.add_argument("--progress-format", choices=("human", "json"), default="human")
     parsed = parser.parse_args(arguments)
     sink = _v2_progress_sink(parsed.progress_format)
+    # Mutually exclusive modes keep category-only runs from silently ignoring embeddings.
     if parsed.category_selection_only:
         if parsed.embedding_fixture is not None:
             parser.error(
@@ -434,6 +448,7 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
                 progress_sink=sink,
             )
         )
+    # Fixture embeddings preserve clustering logic while removing model downloads.
     if parsed.embedding_fixture is not None:
         return _execute_v2(
             lambda: execute_preliminary_clustering(
@@ -464,6 +479,7 @@ def _semantic_audience_formation_main(arguments: list[str]) -> int:
     )
 
 
+# Run the shared fixture-stage command.
 def _fixture_stage_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2.shared import (
         execute_fixture_stage,
@@ -488,6 +504,7 @@ def _fixture_stage_main(arguments: list[str]) -> int:
     )
 
 
+# Run the Cluster Adjudication command.
 def _cluster_adjudication_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2.cluster_adjudication import (
         DEFAULT_CLUSTER_MODEL,
@@ -496,6 +513,7 @@ def _cluster_adjudication_main(arguments: list[str]) -> int:
         execute_cluster_adjudication_stage,
     )
 
+    # The same stage accepts either scripted role responses or a production Groq model.
     parser = argparse.ArgumentParser(
         prog="audience-trend-miner v2-cluster-adjudication"
     )
@@ -520,6 +538,7 @@ def _cluster_adjudication_main(arguments: list[str]) -> int:
     parsed = parser.parse_args(arguments)
     if parsed.fixture is None and not os.environ.get("GROQ_API_KEY"):
         parser.error("GROQ_API_KEY is required without --fixture")
+    # Resolve the adapter once so all clusters share one explicit execution mode.
     adapter_factory = (
         FrozenStageAdapterFactory.from_file(parsed.fixture)
         if parsed.fixture is not None
@@ -537,6 +556,7 @@ def _cluster_adjudication_main(arguments: list[str]) -> int:
     )
 
 
+# Run the Trend Portfolio command.
 def _trend_portfolio_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2.trend_portfolio import (
         DEFAULT_NARRATIVE_MODEL,
@@ -545,6 +565,7 @@ def _trend_portfolio_main(arguments: list[str]) -> int:
         execute_trend_portfolio_stage,
     )
 
+    # Narrative generation can be fixture-backed without changing traffic qualification.
     parser = argparse.ArgumentParser(
         prog="audience-trend-miner v2-trend-portfolio"
     )
@@ -564,6 +585,7 @@ def _trend_portfolio_main(arguments: list[str]) -> int:
     parsed = parser.parse_args(arguments)
     if parsed.fixture is None and not os.environ.get("GROQ_API_KEY"):
         parser.error("GROQ_API_KEY is required without --fixture")
+    # Production and fixture adapters implement the same bounded narrative contract.
     adapter_factory = (
         FrozenNarrativeAdapterFactory.from_file(parsed.fixture)
         if parsed.fixture is not None
@@ -582,6 +604,7 @@ def _trend_portfolio_main(arguments: list[str]) -> int:
     )
 
 
+# Run publication main.
 def _run_publication_main(arguments: list[str]) -> int:
     from audience_trend_miner.v2.run_publication import execute_run_publication
 
@@ -607,6 +630,7 @@ def _run_publication_main(arguments: list[str]) -> int:
         help=argparse.SUPPRESS,
     )
     parsed = parser.parse_args(arguments)
+    # Explicit paths support isolated stage runs; omitted paths resolve under the run root.
     supplied_paths = {
         stage: path
         for stage, path in {
@@ -629,6 +653,7 @@ def _run_publication_main(arguments: list[str]) -> int:
     )
 
 
+# Add v2 fixture arguments.
 def _add_v2_fixture_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--as-of", type=date.fromisoformat, required=True)
@@ -639,6 +664,7 @@ def _add_v2_fixture_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+# Create the selected V2 progress-event sink.
 def _v2_progress_sink(progress_format: str):
     from audience_trend_miner.v2.shared import (
         human_progress_sink,
@@ -652,6 +678,7 @@ def _v2_progress_sink(progress_format: str):
     )
 
 
+# Execute v2.
 def _execute_v2(action: Callable[[], object]) -> int:
     from audience_trend_miner.v2.shared import V2ContractError
 

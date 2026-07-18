@@ -15,6 +15,7 @@ EMBEDDING_FIXTURE = (
 )
 
 
+# Run Semantic Audience Formation through its CLI boundary.
 def run_stage(
     output_dir: Path,
     run_id: str = "formation-run",
@@ -54,6 +55,7 @@ def run_stage(
     )
 
 
+# Publish wikimedia evidence.
 def publish_wikimedia_evidence(output_dir: Path, run_id: str = "formation-run") -> Path:
     completed = subprocess.run(
         [
@@ -79,6 +81,7 @@ def publish_wikimedia_evidence(output_dir: Path, run_id: str = "formation-run") 
     return output_dir / run_id / "wikimedia-evidence.json"
 
 
+# Publish clustering contract evidence.
 def publish_clustering_contract_evidence(output_dir: Path) -> None:
     artifact_path = publish_wikimedia_evidence(output_dir)
     artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
@@ -108,7 +111,9 @@ def publish_clustering_contract_evidence(output_dir: Path) -> None:
     artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
 
 
+# Group tests for semantic audience formation stage behavior.
 class SemanticAudienceFormationStageTest(unittest.TestCase):
+    # Verify: stage resumes a compatible completed artifact without embedding.
     def test_stage_resumes_a_compatible_completed_artifact_without_embedding(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)
@@ -165,6 +170,7 @@ class SentenceTransformer:
             )
             self.assertEqual(resumed_events[0]["progress"], {"current": 1, "total": 1})
 
+    # Verify: review cap defaults to ten accepts all and rejects invalid values.
     def test_review_cap_defaults_to_ten_accepts_all_and_rejects_invalid_values(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -215,6 +221,7 @@ class SentenceTransformer:
                         ).exists()
                     )
 
+    # Verify: stage publishes ranked capped minimal cluster evidence.
     def test_stage_publishes_ranked_capped_minimal_cluster_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)
@@ -262,6 +269,7 @@ class SentenceTransformer:
             self.assertNotIn("embedding_vectors", serialized)
             self.assertNotIn("similarity_matrix", serialized)
 
+    # Verify: stage runs production embeddings with safe configuration progress.
     def test_stage_runs_production_embeddings_with_safe_configuration_progress(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)
@@ -341,6 +349,7 @@ class SentenceTransformer:
             self.assertNotIn("embedding_vectors", completed.stdout)
             self.assertNotIn("similarity_matrix", completed.stdout)
 
+    # Verify: stage forms fixture backed preliminary clusters.
     def test_stage_forms_fixture_backed_preliminary_clusters(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)
@@ -372,6 +381,7 @@ class SentenceTransformer:
             self.assertIn("formed 1 connected components", events[2]["message"])
             self.assertIn("discarded 0 singleton components", events[2]["message"])
 
+    # Verify: stage consumes completed wikimedia evidence without reacquisition.
     def test_stage_consumes_completed_wikimedia_evidence_without_reacquisition(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)
@@ -400,6 +410,7 @@ class SentenceTransformer:
                 "non-hidden",
             )
 
+    # Verify: stage rejects absent incomplete incompatible and mismatched evidence.
     def test_stage_rejects_absent_incomplete_incompatible_and_mismatched_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)

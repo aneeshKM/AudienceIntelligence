@@ -14,23 +14,30 @@ from audience_trend_miner.v2.shared import V2ContractError
 FIXTURES = Path(__file__).with_name("fixtures")
 
 
+# Group tests for cluster adjudication graph behavior.
 class ClusterAdjudicationGraphTest(unittest.TestCase):
+    # Verify: rate limit retries honor provider retry after header.
     def test_rate_limit_retries_honor_provider_retry_after_header(self) -> None:
+        # Model a header rate limit error for this test scenario.
         class HeaderRateLimitError(Exception):
             status_code = 429
 
+            # Initialize the HeaderRateLimitError.
             def __init__(self) -> None:
                 super().__init__("rate limited")
                 self.response = type(
                     "Response", (), {"headers": {"retry-after": "2.5"}}
                 )()
 
+        # Provide the eventually successful adapter test double.
         class EventuallySuccessfulAdapter:
             model = "fixture/model"
 
+            # Initialize the EventuallySuccessfulAdapter.
             def __init__(self) -> None:
                 self.attempts = 0
 
+            # Return scripted responses after the initial retryable failure.
             def invoke(self, request: object) -> object:
                 self.attempts += 1
                 if self.attempts == 1:
@@ -54,13 +61,17 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
         self.assertEqual(result.validation_status, "valid")
         self.assertEqual(waits, [2.6])
 
+    # Verify: rate limit retries parse provider delay from error message.
     def test_rate_limit_retries_parse_provider_delay_from_error_message(self) -> None:
+        # Model a rate limit error for this test scenario.
         class RateLimitError(Exception):
             pass
 
+        # Provide the exhausted adapter test double.
         class ExhaustedAdapter:
             model = "fixture/model"
 
+            # Raise the scripted rate-limit response on every delivery attempt.
             def invoke(self, request: object) -> object:
                 raise RateLimitError("Please try again in 907.5ms")
 
@@ -75,13 +86,17 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
         self.assertEqual(result.validation_errors, ("exhausted_delivery:proposer",))
         self.assertEqual(waits, [1.0075, 1.0075])
 
+    # Verify: deterministic adapter failure terminates without retrying.
     def test_deterministic_adapter_failure_terminates_without_retrying(self) -> None:
+        # Provide the invalid adapter test double.
         class InvalidAdapter:
             model = "invalid/cluster-model"
 
+            # Initialize the InvalidAdapter.
             def __init__(self) -> None:
                 self.attempts = 0
 
+            # Raise a deterministic contract failure for every request.
             def invoke(self, request: object) -> object:
                 del request
                 self.attempts += 1
@@ -104,6 +119,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
 
         self.assertEqual(adapter.attempts, 1)
 
+    # Verify: approved proposal skips revision with role specific prompts.
     def test_approved_proposal_skips_revision_with_role_specific_prompts(self) -> None:
         members = [page(101, "Air purifier"), page(102, "HEPA")]
         adapter = FrozenAdjudicationAdapter(
@@ -124,6 +140,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
         )
         self.assertNotEqual(adapter.calls[0].prompt, adapter.calls[1].prompt)
 
+    # Verify: challenged proposal receives one revision.
     def test_challenged_proposal_receives_one_revision(self) -> None:
         members = [
             page(101, "Air purifier"),
@@ -170,6 +187,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
         )
         self.assertEqual(result["validation"], {"status": "valid", "errors": []})
 
+    # Verify: revision fails closed when it resurrects an unsafe rejection.
     def test_revision_fails_closed_when_it_resurrects_an_unsafe_rejection(self) -> None:
         members = [
             page(101, "Air purifier"),
@@ -211,6 +229,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
             [101, 102, 103],
         )
 
+    # Verify: malformed critique fails closed without revision.
     def test_malformed_critique_fails_closed_without_revision(self) -> None:
         members = [page(101, "Air purifier"), page(102, "HEPA")]
         adapter = FrozenAdjudicationAdapter(
@@ -243,6 +262,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
             [member["page_id"] for member in result["rejected_members"]], [101, 102]
         )
 
+    # Verify: invalid proposal receives one revision before final validation.
     def test_invalid_proposal_receives_one_revision_before_final_validation(self) -> None:
         members = [page(101, "Air purifier"), page(102, "HEPA")]
         adapter = FrozenAdjudicationAdapter(
@@ -262,6 +282,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
         )
         self.assertEqual(result["validation"], {"status": "valid", "errors": []})
 
+    # Verify: rejection in an invalid proposal remains terminal.
     def test_rejection_in_an_invalid_proposal_remains_terminal(self) -> None:
         members = [
             page(101, "Air purifier"),
@@ -286,6 +307,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
         self.assertEqual(result["validation"]["status"], "invalid")
         self.assertIn("resurrected_page_id:103", result["validation"]["errors"])
 
+    # Verify: unresolved safety challenge fails closed.
     def test_unresolved_safety_challenge_fails_closed(self) -> None:
         members = [
             page(101, "Air purifier"),
@@ -319,6 +341,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
             "critic_required_rejection_missing:103", result["validation"]["errors"]
         )
 
+    # Verify: keeps a coherent component using only allowed page evidence.
     def test_keeps_a_coherent_component_using_only_allowed_page_evidence(self) -> None:
         cluster = {
             "cohesion": 0.91,
@@ -391,6 +414,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
             ],
         )
 
+    # Verify: splits internally and rejects a member exactly once.
     def test_splits_internally_and_rejects_a_member_exactly_once(self) -> None:
         members = [
             page(101, "Air purifier"),
@@ -429,6 +453,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
         ] + [member["page_id"] for member in result["rejected_members"]]
         self.assertCountEqual(terminal_ids, [101, 102, 103, 104, 105])
 
+    # Verify: invalid membership fails closed to component rejection.
     def test_invalid_membership_fails_closed_to_component_rejection(self) -> None:
         members = [page(101, "Air purifier"), page(102, "HEPA"), page(103, "Fan")]
         scenarios = (
@@ -490,6 +515,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
                     ],
                 )
 
+    # Verify: rejects a whole component with minimal interpretable evidence.
     def test_rejects_a_whole_component_with_minimal_interpretable_evidence(self) -> None:
         members = [page(201, "Crime event"), page(202, "Crime suspect")]
 
@@ -516,6 +542,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
         )
         self.assertEqual(result["validation"], {"status": "valid", "errors": []})
 
+    # Verify: malformed model output fails closed.
     def test_malformed_model_output_fails_closed(self) -> None:
         members = [page(101, "Air purifier"), page(102, "HEPA")]
 
@@ -529,6 +556,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
             {"status": "invalid", "errors": ["invalid_proposal_shape"]},
         )
 
+    # Verify: rejects invalid preliminary cluster evidence before model input.
     def test_rejects_invalid_preliminary_cluster_evidence_before_model_input(self) -> None:
         scenarios = (
             [page(101, "Duplicate"), page(101, "Duplicate")],
@@ -556,6 +584,7 @@ class ClusterAdjudicationGraphTest(unittest.TestCase):
                 self.assertEqual(adapter.model_inputs, [])
 
 
+# Build one model-visible canonical page fixture.
 def page(page_id: int, title: str) -> dict[str, object]:
     return {
         "page_id": page_id,
@@ -565,10 +594,12 @@ def page(page_id: int, title: str) -> dict[str, object]:
     }
 
 
+# Build one accepted-group model response.
 def group(name: str, page_ids: list[int]) -> dict[str, object]:
     return {"name": name, "page_ids": page_ids, "rationale": "Fixture rationale."}
 
 
+# Build one rejected-page model response.
 def rejection(page_id: int) -> dict[str, object]:
     return {"page_id": page_id, "reason": "semantic_mismatch"}
 

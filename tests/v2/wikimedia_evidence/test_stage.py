@@ -11,7 +11,9 @@ from pathlib import Path
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "v2_wikimedia_evidence.json"
 
 
+# Group tests for v2 wikimedia evidence cli behavior.
 class V2WikimediaEvidenceCliTest(unittest.TestCase):
+    # Verify: fixture stage publishes complete country evidence without zero filling.
     def test_fixture_stage_publishes_complete_country_evidence_without_zero_filling(self) -> None:
         with tempfile.TemporaryDirectory() as output_dir:
             completed = subprocess.run(
@@ -85,6 +87,7 @@ class V2WikimediaEvidenceCliTest(unittest.TestCase):
             self.assertEqual(cutoffs["2026-07-02"], 90)
             self.assertEqual(cutoffs["2026-07-06"], None)
 
+    # Verify: metadata exclusions and unavailability are neutral and deterministic.
     def test_metadata_exclusions_and_unavailability_are_neutral_and_deterministic(self) -> None:
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
         fixture["daily_responses"]["2026-07-02"]["records"].extend(
@@ -116,6 +119,7 @@ class V2WikimediaEvidenceCliTest(unittest.TestCase):
             self.assertEqual(payload["exclusions"]["internal_namespaces"], {"special": 1})
             self.assertEqual([page["page_id"] for page in payload["canonical_pages"]], [42, 84])
 
+    # Verify: stage rejects an effective window below minimum coverage.
     def test_stage_rejects_an_effective_window_below_minimum_coverage(self) -> None:
         fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
         fixture["daily_responses"]["2026-07-05"] = {"error": "unavailable"}

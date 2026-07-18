@@ -11,6 +11,7 @@ from pathlib import Path
 FIXTURES = Path(__file__).with_name("fixtures")
 
 
+# Build one canonical page fixture for a preliminary cluster.
 def page(page_id: int, title: str) -> dict[str, object]:
     return {
         "page_id": page_id,
@@ -20,6 +21,7 @@ def page(page_id: int, title: str) -> dict[str, object]:
     }
 
 
+# Publish formation.
 def publish_formation(output_dir: Path, run_id: str, clusters: list[list[dict[str, object]]]) -> Path:
     run_directory = output_dir / run_id
     run_directory.mkdir(parents=True)
@@ -66,6 +68,7 @@ def publish_formation(output_dir: Path, run_id: str, clusters: list[list[dict[st
     return path
 
 
+# Run Cluster Adjudication with the shared fixture setup.
 def run_stage(
     output_dir: Path,
     run_id: str = "adjudication-run",
@@ -94,7 +97,9 @@ def run_stage(
     )
 
 
+# Group tests for cluster adjudication stage behavior.
 class ClusterAdjudicationStageTest(unittest.TestCase):
+    # Verify: resume rejects schema valid artifact with duplicate terminal membership.
     def test_resume_rejects_schema_valid_artifact_with_duplicate_terminal_membership(self) -> None:
         clusters = [
             [page(101, "Air purifier"), page(102, "HEPA")],
@@ -130,6 +135,7 @@ class ClusterAdjudicationStageTest(unittest.TestCase):
             self.assertNotEqual(resumed.returncode, 0)
             self.assertIn("terminal membership", resumed.stderr)
 
+    # Verify: resume rejects checkpoint that moves pages between components.
     def test_resume_rejects_checkpoint_that_moves_pages_between_components(self) -> None:
         clusters = [
             [page(101, "Air purifier"), page(102, "HEPA")],
@@ -169,6 +175,7 @@ class ClusterAdjudicationStageTest(unittest.TestCase):
             self.assertNotEqual(resumed.returncode, 0)
             self.assertIn("checkpoint terminal membership", resumed.stderr)
 
+    # Verify: atomic failure resumes completed clusters without repeating them.
     def test_atomic_failure_resumes_completed_clusters_without_repeating_them(self) -> None:
         clusters = [
             [page(101, "Air purifier"), page(102, "HEPA")],
@@ -221,6 +228,7 @@ class ClusterAdjudicationStageTest(unittest.TestCase):
                 ["resume"],
             )
 
+    # Verify: stage retries delivery three times and fails exhausted step closed.
     def test_stage_retries_delivery_three_times_and_fails_exhausted_step_closed(self) -> None:
         clusters = [
             [page(401, "Air purifier"), page(402, "Air filter")],
@@ -262,6 +270,7 @@ class ClusterAdjudicationStageTest(unittest.TestCase):
                 step["role"] for step in payload["adjudications"][1]["steps"]
             ])
 
+    # Verify: stage adjudicates every selected cluster to exclusive terminal states.
     def test_stage_adjudicates_every_selected_cluster_to_exclusive_terminal_states(self) -> None:
         clusters = [
             [page(101, "Air purifier"), page(102, "HEPA")],

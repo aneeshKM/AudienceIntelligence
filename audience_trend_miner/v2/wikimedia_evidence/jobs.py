@@ -11,6 +11,7 @@ from uuid import UUID
 import psycopg
 
 
+# Represent a leased unit of resumable Wikimedia acquisition work.
 @dataclass(frozen=True)
 class EvidenceJob:
     id: UUID
@@ -25,6 +26,7 @@ class EvidenceJob:
     error: str | None = None
 
 
+# Record the payload produced by a completed evidence job.
 @dataclass(frozen=True)
 class CompletedEvidence:
     operation: str
@@ -33,6 +35,7 @@ class CompletedEvidence:
     attempts: int
 
 
+# Record a terminal job failure without losing its audit trail.
 @dataclass(frozen=True)
 class FailedEvidence:
     operation: str
@@ -46,11 +49,15 @@ COUNTRY_DAY_OPERATION = "country-day"
 METADATA_BATCH_OPERATION = "metadata-batch"
 
 
+# Persist idempotent jobs, leases, retries, and completion barriers in PostgreSQL.
 class EvidenceJobStore:
+    # Initialize the EvidenceJobStore.
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
 
+    # Create or upgrade the evidence job tables.
     def migrate(self) -> None:
+        # Migrations are additive so older resumable databases remain usable.
         with psycopg.connect(self.database_url) as connection:
             connection.execute(
                 """
@@ -91,7 +98,9 @@ class EvidenceJobStore:
                    publication_complete boolean NOT NULL DEFAULT false"""
             )
 
+    # Create a run once or reject effective-configuration drift on resume.
     def ensure_run(self, run_id: str, configuration: dict[str, str]) -> None:
+        # Conflict updates return the original configuration for an exact drift check.
         with psycopg.connect(self.database_url) as connection:
             row = connection.execute(
                 """INSERT INTO acquisition_runs (run_id, configuration)
@@ -103,15 +112,19 @@ class EvidenceJobStore:
         if row[0] != configuration:
             raise ValueError("resumed run configuration does not match recorded facts")
 
+    # Schedule country days.
     def schedule_country_days(self, run_id: str, subjects: tuple[str, ...]) -> None:
         self._schedule(run_id, COUNTRY_DAY_OPERATION, subjects)
 
+    # Schedule metadata batches.
     def schedule_metadata_batches(self, run_id: str, subjects: tuple[str, ...]) -> None:
         self._schedule(run_id, METADATA_BATCH_OPERATION, subjects)
 
+    # Insert missing jobs without duplicating existing work.
     def _schedule(
         self, run_id: str, operation: str, subjects: tuple[str, ...]
     ) -> None:
+        # The unique run/operation/subject key makes repeated scheduling idempotent.
         with psycopg.connect(self.database_url) as connection:
             connection.cursor().executemany(
                 """INSERT INTO evidence_jobs (run_id, operation, subject)
@@ -119,6 +132,7 @@ class EvidenceJobStore:
                 ((run_id, operation, subject) for subject in subjects),
             )
 
+    # Reserve publication path.
     def reserve_publication_path(self, run_id: str, path: str) -> None:
         with psycopg.connect(self.database_url) as connection:
             row = connection.execute(
@@ -130,6 +144,7 @@ class EvidenceJobStore:
         if row is None or row[0] != path:
             raise ValueError("run was already published to a different path")
 
+    # Mark publication complete.
     def mark_publication_complete(self, run_id: str, path: str) -> None:
         with psycopg.connect(self.database_url) as connection:
             updated = connection.execute(
@@ -140,6 +155,7 @@ class EvidenceJobStore:
         if updated != 1:
             raise ValueError("publication path was not reserved for this run")
 
+    # Atomically claim the next available job.
     def claim(
         self,
         worker: str,
@@ -149,6 +165,7 @@ class EvidenceJobStore:
         operations: tuple[str, ...] | None = None,
         max_attempts: int = 3,
     ) -> EvidenceJob | None:
+        # Expired leases at the attempt cap become terminal before new work is chosen.
         with psycopg.connect(self.database_url) as connection:
             connection.execute(
                 """UPDATE evidence_jobs SET status = 'failed',
@@ -158,6 +175,7 @@ class EvidenceJobStore:
                      AND attempts >= %s""",
                 (max_attempts,),
             )
+            # SKIP LOCKED lets concurrent workers claim distinct jobs without blocking.
             row = connection.execute(
                 """
                 WITH available AS (
@@ -180,12 +198,16 @@ class EvidenceJobStore:
                 (run_id, run_id, list(operations) if operations else None,
                  list(operations) if operations else None, worker, lease_seconds),
             ).fetchone()
+        # A fresh claim token prevents stale workers from completing reclaimed work.
         return EvidenceJob(*row) if row else None
 
+    # Mark a claimed job as completed.
     def complete(self, job: EvidenceJob, evidence: object) -> None:
         self._finish(job, "completed", evidence=evidence)
 
+    # Mark a claimed job as failed or retryable.
     def fail(self, job: EvidenceJob, reason: str, *, terminal: bool) -> None:
+        # Retryable failures return to pending; terminal failures remain audit evidence.
         with psycopg.connect(self.database_url) as connection:
             updated = connection.execute(
                 """UPDATE evidence_jobs SET status = %s, error = %s,
@@ -196,7 +218,9 @@ class EvidenceJobStore:
         if updated != 1:
             raise RuntimeError("evidence job lease was lost before failure update")
 
+    # Persist a terminal job result for the active claim.
     def _finish(self, job: EvidenceJob, status: str, *, evidence: object) -> None:
+        # Completion succeeds only for the worker holding the current lease token.
         with psycopg.connect(self.database_url) as connection:
             updated = connection.execute(
                 """UPDATE evidence_jobs SET status = %s, evidence = %s::jsonb,
@@ -207,6 +231,7 @@ class EvidenceJobStore:
         if updated != 1:
             raise RuntimeError("evidence job lease was lost before completion")
 
+    # Check whether all jobs of a kind reached a terminal state.
     def barrier_reached(self, run_id: str, operations: tuple[str, ...]) -> bool:
         with psycopg.connect(self.database_url) as connection:
             unfinished = connection.execute(
@@ -217,6 +242,7 @@ class EvidenceJobStore:
             ).fetchone()[0]
         return unfinished == 0
 
+    # Return terminal results once a job-kind barrier is reached.
     def results_at_barrier(
         self, run_id: str, operations: tuple[str, ...]
     ) -> tuple[TerminalEvidence, ...]:
@@ -224,11 +250,13 @@ class EvidenceJobStore:
             raise RuntimeError("evidence results requested before the run barrier")
         return self._terminal_evidence(run_id, operations)
 
+    # Return all terminal job results of a kind.
     def terminal_results(
         self, run_id: str, operations: tuple[str, ...]
     ) -> tuple[TerminalEvidence, ...]:
         return self._terminal_evidence(run_id, operations)
 
+    # Load terminal evidence for a job kind.
     def _terminal_evidence(
         self,
         run_id: str,
@@ -253,15 +281,18 @@ class EvidenceJobStore:
             for operation, item_subject, status, attempts, evidence, error in rows
         )
 
+    # Clear for tests.
     def clear_for_tests(self) -> None:
         with psycopg.connect(self.database_url) as connection:
             connection.execute("TRUNCATE evidence_jobs")
             connection.execute("TRUNCATE acquisition_runs")
 
 
+# Execute claimed jobs and report bounded progress at barriers.
 class EvidenceJobExecution:
     """Run fetch Evidence Jobs while hiding lifecycle policy from callers."""
 
+    # Initialize the EvidenceJobExecution.
     def __init__(
         self,
         store: EvidenceJobStore,
@@ -279,6 +310,7 @@ class EvidenceJobExecution:
         self.jitter = jitter
         self.honor_retry_after = honor_retry_after
 
+    # Process jobs until the selected barrier is reached.
     def drain(
         self,
         run_id: str,
@@ -289,6 +321,8 @@ class EvidenceJobExecution:
         is_terminal_error: Callable[[Exception], bool],
         on_terminal: Callable[[EvidenceJob], None] | None = None,
     ) -> None:
+        # Workers stop only when every selected operation reaches a terminal barrier.
+        # Execute one claimed evidence job.
         def work(worker_number: int) -> None:
             while not self.store.barrier_reached(run_id, operations):
                 job = self.store.claim(
@@ -298,12 +332,14 @@ class EvidenceJobExecution:
                     operations=operations,
                     max_attempts=self.max_attempts,
                 )
+                # A temporary empty claim can occur while another worker holds a lease.
                 if job is None:
                     self.sleep(0.01)
                     continue
                 try:
                     self.store.complete(job, handler(job))
                 except Exception as error:
+                    # Retry policy is centralized here so handlers contain domain work only.
                     terminal = (
                         is_terminal_error(error) or job.attempts >= self.max_attempts
                     )
@@ -321,5 +357,6 @@ class EvidenceJobExecution:
                     if on_terminal:
                         on_terminal(job)
 
+        # The durable claim query, not thread identity, coordinates parallel workers.
         with ThreadPoolExecutor(max_workers=workers) as executor:
             tuple(executor.map(work, range(workers)))

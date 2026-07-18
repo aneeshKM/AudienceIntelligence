@@ -28,6 +28,7 @@ Direction = Literal[
 Window = Literal["previous", "current"]
 
 
+# Represent censored traffic bounds for one seven-day window.
 @dataclass(frozen=True)
 class WindowTraffic:
     """Published traffic and its normalized conservative range for one window."""
@@ -42,6 +43,7 @@ class WindowTraffic:
     maximum: float
 
 
+# Combine previous/current windows with a robust direction classification.
 @dataclass(frozen=True)
 class ClusterTraffic:
     """Deterministic traffic evidence attached to terminal cluster membership."""
@@ -56,6 +58,7 @@ class ClusterTraffic:
     direction: Direction
 
 
+# Index validated Wikimedia evidence needed for traffic calculations.
 @dataclass(frozen=True)
 class _TrafficEvidence:
     successful_dates: dict[Window, tuple[str, ...]]
@@ -63,6 +66,7 @@ class _TrafficEvidence:
     pages: dict[int, dict[str, int]]
 
 
+# Attach censored Wikimedia traffic after cluster membership is terminal.
 def attach_cluster_traffic(
     *,
     run_id: str,
@@ -70,6 +74,7 @@ def attach_cluster_traffic(
     cluster_adjudication_path: Path,
 ) -> tuple[ClusterTraffic, ...]:
     """Attach censored Wikimedia traffic after cluster membership is terminal."""
+    # Load both upstream contracts before combining membership with observations.
     evidence_artifact = consume_artifact(
         wikimedia_evidence_path,
         run_id=run_id,
@@ -91,6 +96,7 @@ def attach_cluster_traffic(
         stage_name="Cluster Adjudication",
     )
 
+    # Build strict indexes once so every cluster uses the same verified evidence.
     successful_dates = _successful_dates(evidence_payload)
     cutoffs = _daily_cutoffs(evidence_payload, successful_dates)
     pages = _canonical_pages(evidence_payload, successful_dates)
@@ -100,10 +106,13 @@ def attach_cluster_traffic(
     )
     _validate_terminal_membership(clusters, pages)
 
+    # Traffic is attached only after terminal membership, preventing signal leakage
+    # into semantic clustering or model adjudication.
     attached: list[ClusterTraffic] = []
     for cluster in clusters:
         members = cast(list[dict[str, object]], cluster["members"])
         page_ids = tuple(cast(int, member["page_id"]) for member in members)
+        # Missing top-list observations are censored by the known daily cutoff.
         previous = _window_traffic(
             page_ids,
             "previous",
@@ -131,6 +140,7 @@ def attach_cluster_traffic(
     return tuple(attached)
 
 
+# Load a schema-compatible upstream payload.
 def _compatible_payload(
     artifact: dict[str, object],
     *,
@@ -147,6 +157,7 @@ def _compatible_payload(
     return cast(dict[str, object], payload)
 
 
+# Extract successfully acquired evidence dates.
 def _successful_dates(
     payload: dict[str, object],
 ) -> dict[Window, tuple[str, ...]]:
@@ -168,6 +179,7 @@ def _successful_dates(
     return {window: tuple(values) for window, values in dates.items()}
 
 
+# Index daily top-list cutoffs by date.
 def _daily_cutoffs(
     payload: dict[str, object],
     successful_dates: dict[Window, tuple[str, ...]],
@@ -193,6 +205,7 @@ def _daily_cutoffs(
     return cutoffs
 
 
+# Index canonical page evidence by page ID.
 def _canonical_pages(
     payload: dict[str, object],
     successful_dates: dict[Window, tuple[str, ...]],
@@ -221,6 +234,7 @@ def _canonical_pages(
     return pages
 
 
+# Validate terminal membership.
 def _validate_terminal_membership(
     clusters: list[dict[str, object]],
     pages: dict[int, dict[str, int]],
@@ -240,6 +254,7 @@ def _validate_terminal_membership(
         )
 
 
+# Aggregate censored traffic bounds for one date window.
 def _window_traffic(
     page_ids: tuple[int, ...],
     window: Window,
@@ -250,6 +265,8 @@ def _window_traffic(
     observed_page_days = 0
     minimum = 0
     maximum = 0
+    # Published values are ceilings to a hundred; absent values lie below the day's
+    # minimum published cutoff and therefore contribute only an upper bound.
     for day in dates:
         for page_id in page_ids:
             published = evidence.pages[page_id].get(day)
@@ -273,9 +290,12 @@ def _window_traffic(
     )
 
 
+# Classify change from non-overlapping traffic bounds.
 def _direction(previous: WindowTraffic, current: WindowTraffic) -> Direction:
+    # Zero prior observed traffic with current observations is a distinct launch-like case.
     if previous.observed_total == 0 and current.observed_total > 0:
         return "sudden_growth"
+    # Cross-multiplication compares per-day bounds without rounding normalized totals.
     if (
         current.conservative_observed_minimum * previous.successful_days
         > previous.conservative_observed_maximum * current.successful_days

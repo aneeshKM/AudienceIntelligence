@@ -24,12 +24,15 @@ MACOS_CA_BUNDLE = Path("/etc/ssl/cert.pem")
 DEFAULT_REQUEST_INTERVAL_SECONDS = 0.5
 
 
+# Build an SSL context from the macOS or certifi CA bundle.
 def trusted_ssl_context() -> ssl.SSLContext:
     ca_bundle = MACOS_CA_BUNDLE if MACOS_CA_BUNDLE.is_file() else Path(certifi.where())
     return ssl.create_default_context(cafile=str(ca_bundle))
 
 
+# Mark a Wikimedia failure as safe to retry after a delay.
 class WikimediaTransientError(RuntimeError):
+    # Store retry guidance on a recoverable Wikimedia failure.
     def __init__(
         self,
         message: str,
@@ -43,12 +46,15 @@ class WikimediaTransientError(RuntimeError):
         super().__init__(message)
 
 
+# Mark a Wikimedia failure as deterministic and non-retryable.
 class WikimediaPermanentError(RuntimeError):
+    # Mark a Wikimedia failure that should not be retried.
     def __init__(self, message: str) -> None:
         self.attempts = 1
         super().__init__(message)
 
 
+# Represent one ranked page from the country top-pages API.
 @dataclass(frozen=True)
 class CountryPageviewRecord:
     project: str
@@ -56,12 +62,14 @@ class CountryPageviewRecord:
     views_ceil: int
 
 
+# Carry one day of ranked country traffic and its cutoff.
 @dataclass(frozen=True)
 class CountryTopPagesResponse:
     records: tuple[CountryPageviewRecord, ...]
     raw: object
 
 
+# Carry canonical identity and semantic metadata for one page.
 @dataclass(frozen=True)
 class MetadataResponse:
     page_id: int
@@ -71,6 +79,7 @@ class MetadataResponse:
     raw: object
 
 
+# Carry resolved metadata plus aliases and unavailable titles.
 @dataclass(frozen=True)
 class MetadataBatchResponse:
     pages: tuple[MetadataResponse, ...]
@@ -78,11 +87,15 @@ class MetadataBatchResponse:
     unavailable_titles: tuple[str, ...]
 
 
+# Define the rate-limited JSON transport boundary.
 class JsonTransport(Protocol):
+    # Fetch a URL and decode its JSON response.
     def get_json(self, url: str) -> object: ...
 
 
+# Provide paced HTTPS JSON requests with classified failures.
 class UrllibJsonTransport:
+    # Configure HTTPS and request pacing for Wikimedia calls.
     def __init__(
         self,
         *,
@@ -94,6 +107,7 @@ class UrllibJsonTransport:
         self._request_lock = Lock()
         self._next_request_at = 0.0
 
+    # Block until the shared request interval permits another call.
     def _wait_for_request_slot(self) -> None:
         with self._request_lock:
             now = time.monotonic()
@@ -103,6 +117,7 @@ class UrllibJsonTransport:
                 now = time.monotonic()
             self._next_request_at = now + self._request_interval_seconds
 
+    # Fetch JSON and classify HTTP failures as transient or permanent.
     def get_json(self, url: str) -> object:
         try:
             self._wait_for_request_slot()
@@ -133,7 +148,9 @@ class UrllibJsonTransport:
             raise WikimediaTransientError(str(error)) from error
 
 
+# Translate Wikimedia REST and Action API responses into domain records.
 class HttpWikimediaAdapter:
+    # Configure the Wikimedia transport and API endpoint URLs.
     def __init__(
         self,
         *,
@@ -145,6 +162,7 @@ class HttpWikimediaAdapter:
         self._rest_base_url = rest_base_url.rstrip("/")
         self._action_api_url = action_api_url
 
+    # Fetch and parse the United States' top Wikipedia pages for one day.
     def daily_country_top_pages(self, day: date) -> CountryTopPagesResponse:
         url = (
             f"{self._rest_base_url}/metrics/pageviews/top-per-country/"
@@ -168,7 +186,10 @@ class HttpWikimediaAdapter:
             ) from error
         return CountryTopPagesResponse(records=records, raw=raw)
 
+    # Fetch metadata for up to 50 titles while resolving aliases and pagination.
     def metadata_batch(self, titles: tuple[str, ...]) -> MetadataBatchResponse:
+        # Wikimedia's Action API limits title batches, while category pagination may
+        # require several requests for that same batch.
         if not titles or len(titles) > 50:
             raise ValueError("metadata batches require between 1 and 50 titles")
         parameters: dict[str, object] = {
@@ -189,6 +210,7 @@ class HttpWikimediaAdapter:
         redirects: dict[str, str] = {}
         normalized: dict[str, str] = {}
         missing: set[str] = set()
+        # Merge every continuation page into page-ID keyed metadata accumulators.
         while True:
             raw = cast(
                 dict[str, Any],
@@ -224,6 +246,7 @@ class HttpWikimediaAdapter:
                 continuation = raw.get("continue")
             except (KeyError, TypeError, ValueError) as error:
                 raise WikimediaTransientError("invalid metadata batch response") from error
+            # Absence of a continuation object marks the complete logical response.
             if not isinstance(continuation, dict):
                 break
             parameters.update(continuation)
@@ -231,6 +254,8 @@ class HttpWikimediaAdapter:
         page_ids_by_title = {
             str(page["title"]): page_id for page_id, page in pages.items()
         }
+        # Replay normalization and redirect chains from each requested spelling to a
+        # stable page ID, with cycle protection for malformed redirect data.
         aliases: dict[str, int] = {}
         for requested in titles:
             resolved = normalized.get(requested, requested)

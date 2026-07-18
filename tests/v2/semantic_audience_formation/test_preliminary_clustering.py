@@ -21,6 +21,7 @@ FIXTURE = (
 )
 
 
+# Build one selected-category page fixture.
 def page(page_id: int, title: str, category: str) -> SelectedCategoryPage:
     return SelectedCategoryPage(
         page_id=page_id,
@@ -30,7 +31,9 @@ def page(page_id: int, title: str, category: str) -> SelectedCategoryPage:
     )
 
 
+# Group tests for preliminary clustering behavior.
 class PreliminaryClusteringTest(unittest.TestCase):
+    # Verify: singleton subdivision is provenanced without perfect cohesion.
     def test_singleton_subdivision_is_provenanced_without_perfect_cohesion(self) -> None:
         pages = tuple(
             page(index, f"Page {index}", "Shared") for index in range(1, 4)
@@ -59,6 +62,7 @@ class PreliminaryClusteringTest(unittest.TestCase):
         self.assertEqual(artifact.singleton_count, 0)
         self.assertEqual(artifact.singleton_subdivision_count, 1)
 
+    # Verify: rejects a page that cannot fit the guard without truncation.
     def test_rejects_a_page_that_cannot_fit_the_guard_without_truncation(self) -> None:
         pages = (
             SelectedCategoryPage(1, "One", "x" * 500, ("Shared",)),
@@ -81,6 +85,7 @@ class PreliminaryClusteringTest(unittest.TestCase):
                 ),
             )
 
+    # Verify: subdivides only oversized components without dropping members.
     def test_subdivides_only_oversized_components_without_dropping_members(self) -> None:
         pages = tuple(
             page(index, f"Page {index}", "Shared") for index in range(1, 7)
@@ -144,6 +149,7 @@ class PreliminaryClusteringTest(unittest.TestCase):
             [cluster.page_ids for cluster in repeated.preliminary_clusters],
         )
 
+    # Verify: forms and ranks minimal clusters from dual representations.
     def test_forms_and_ranks_minimal_clusters_from_dual_representations(self) -> None:
         pages = (
             page(7, "Gamma Two", "Gamma"),
@@ -186,6 +192,7 @@ class PreliminaryClusteringTest(unittest.TestCase):
         self.assertEqual(retained_page_ids, set(range(1, 10)))
         self.assertNotIn("traffic", str(record).lower())
 
+    # Verify: rejects invalid embeddings before similarity is used.
     def test_rejects_invalid_embeddings_before_similarity_is_used(self) -> None:
         pages = (page(1, "One", "Shared"), page(2, "Two", "Shared"))
         scenarios = (
@@ -208,6 +215,7 @@ class PreliminaryClusteringTest(unittest.TestCase):
                 with self.assertRaisesRegex(V2ContractError, expected_error):
                     form_preliminary_clusters(pages, adapter, threshold=0.5)
 
+    # Verify: handles representative candidate universe without persisting vectors.
     def test_handles_representative_candidate_universe_without_persisting_vectors(self) -> None:
         pages = tuple(page(index, f"Page {index}", "Shared") for index in range(1, 258))
         adapter = ConstantNumpyEmbeddingAdapter()
@@ -225,6 +233,7 @@ class PreliminaryClusteringTest(unittest.TestCase):
         self.assertNotIn("embeddings", record)
         self.assertNotIn("similarity_matrix", record)
 
+    # Verify: preserves cosine similarity for finite extreme vectors.
     def test_preserves_cosine_similarity_for_finite_extreme_vectors(self) -> None:
         pages = (page(1, "One", "Shared"), page(2, "Two", "Shared"))
         extreme_vectors = (
@@ -245,24 +254,30 @@ class PreliminaryClusteringTest(unittest.TestCase):
         self.assertAlmostEqual(artifact.preliminary_clusters[0].cohesion, 1.0)
 
 
+# Provide the sequential embedding adapter test double.
 class SequentialEmbeddingAdapter:
     model = "invalid-fixture"
 
+    # Initialize the SequentialEmbeddingAdapter.
     def __init__(self, responses: list[tuple[tuple[float, ...], ...]]) -> None:
         self._responses = iter(responses)
 
+    # Return the next deterministic embedding matrix.
     def embed(
         self, _representations: tuple[str, ...]
     ) -> tuple[tuple[float, ...], ...]:
         return next(self._responses)
 
 
+# Provide the constant numpy embedding adapter test double.
 class ConstantNumpyEmbeddingAdapter:
     model = "representative-fixture"
 
+    # Initialize the ConstantNumpyEmbeddingAdapter.
     def __init__(self) -> None:
         self.batch_sizes: list[int] = []
 
+    # Return a constant NumPy embedding matrix.
     def embed(self, representations: tuple[str, ...]) -> np.ndarray:
         self.batch_sizes.append(len(representations))
         return np.tile(np.array((1.0, 0.5, 0.25)), (len(representations), 1))
